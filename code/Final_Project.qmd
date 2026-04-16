@@ -511,6 +511,265 @@ final_xgb_fit %>%
 # Save final predictions to submission file
 test_sub %>%
   mutate(yield_mg_ha = xgb_preds$pred_yield_mg_ha) %>%
-  write_csv("../output/testing_submission_filled.csv")
+  write_csv("../output/testing_submission_filled_xgb.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# machine learning models: GLMNet
+
+
+```{r}
+#| message: false
+#| warning: false
+
+library(glmnet)
+library(tidyverse)
+library(tidymodels)
+# GLMNet has only 2 hyperparameters:
+# penalty  = how much to shrink coefficients (lambda)
+# mixture  = 0 is pure Ridge, 1 is pure Lasso, 0.5 is Elastic Net
+glmnet_spec = linear_reg(
+  penalty = tune(),
+  mixture = tune()
+) %>%
+  set_engine("glmnet") %>%
+  set_mode("regression")
+
+glmnet_spec
+```
+
+## GLMNet recipe
+
+```{r}
+#| message: false
+#| warning: false
+
+# GLMNet REQUIRES normalized predictors (unlike XGBoost)
+# So we add step_normalize() here
+glmnet_rec = recipe(
+  yield_mg_ha ~ year + site + replicate + block + hybrid +
+    date_planted + date_harvested +
+    grain_moisture +
+    previous_crop + longitude + latitude +
+    soilpH + om_pct + soilk_ppm + soilp_ppm +
+    tmean_season + tmax_mean + tmin_mean +
+    heat_stress_days + gdd_total + precip_total + srad_mean,
+  data = train_df
+) %>%
+  # Convert character predictors to factors
+  step_string2factor(all_nominal_predictors()) %>%
+  
+  # Parse date columns
+  step_mutate(
+    planted_date   = mdy(date_planted),
+    harvested_date = mdy(date_harvested)
+  ) %>%
+  
+  # Engineer date features
+  step_mutate(
+    doy_planted      = yday(planted_date),
+    doy_harvested    = yday(harvested_date),
+    harvest_interval = as.numeric(harvested_date - planted_date)
+  ) %>%
+  
+  # Remove original date columns
+  step_rm(date_planted, date_harvested, planted_date, harvested_date) %>%
+  
+  # Impute missing values
+  step_impute_median(all_numeric_predictors()) %>%
+  step_impute_mode(all_nominal_predictors()) %>%
+  
+  # Dummy encode categorical variables
+  step_dummy(all_nominal_predictors()) %>%
+  
+  # IMPORTANT: GLMNet needs normalized predictors
+  step_normalize(all_numeric_predictors())
+
+glmnet_rec
+```
+
+## GLMNet workflow
+
+```{r}
+#| message: false
+#| warning: false
+
+glmnet_wf = workflow() %>%
+  add_model(glmnet_spec) %>%
+  add_recipe(glmnet_rec)
+
+glmnet_wf
+```
+
+## GLMNet tuning grid
+
+```{r}
+#| message: false
+#| warning: false
+
+set.seed(488)
+
+# Simple grid - only 2 hyperparameters so we can try many combinations
+glmnet_grid = grid_regular(
+  penalty(range = c(-4, 0)),   # from 0.0001 to 1
+  mixture(range = c(0, 1)),    # from pure Ridge to pure Lasso
+  levels = 10                  # 10x10 = 100 combinations
+)
+
+cat("GLMNet grid size:", nrow(glmnet_grid), "combinations\n")
+glmnet_grid
+```
+
+## Tune GLMNet with grouped CV
+
+```{r}
+set.seed(488)
+
+cv_folds = group_vfold_cv(
+  train_df,
+  group = site_year,
+  v = 5
+)
+```
+
+```{r}
+#| message: false
+#| warning: false
+
+# Use same cv_folds as XGBoost for fair comparison
+set.seed(488)
+
+# Parallel processing to speed up
+library(doParallel)
+registerDoParallel(cores = parallel::detectCores() - 1)
+
+glmnet_tuned = tune_grid(
+  glmnet_wf,
+  resamples = cv_folds,
+  grid      = glmnet_grid,
+  metrics   = metric_set(rmse, rsq),
+  control   = control_grid(save_pred = TRUE)
+)
+
+stopImplicitCluster()
+
+cat("GLMNet tuning complete!\n")
+
+# Show best results
+collect_metrics(glmnet_tuned) %>%
+  filter(.metric == "rmse") %>%
+  arrange(mean) %>%
+  head(10)
+```
+
+## Select best GLMNet model
+
+```{r}
+#| message: false
+#| warning: false
+
+# Select best model based on lowest RMSE
+best_glmnet = glmnet_tuned %>%
+  select_best(metric = "rmse")
+
+best_glmnet
+
+# Finalize workflow with best parameters
+final_glmnet_wf = finalize_workflow(glmnet_wf, best_glmnet)
+final_glmnet_wf
+```
+
+## GLMNet predicted vs observed plot
+
+```{r}
+#| message: false
+#| warning: false
+
+# Collect CV predictions for best model
+glmnet_tuned %>%
+  collect_predictions() %>%
+  inner_join(best_glmnet) %>%
+  ggplot(aes(x = yield_mg_ha, y = .pred)) +
+  geom_point(alpha = 0.3, color = "steelblue") +
+  geom_abline(color = "red", linewidth = 1) +
+  geom_smooth(method = "lm", color = "blue") +
+  labs(
+    title = "GLMNet: Predicted vs Observed Yield",
+    x     = "Observed Yield (mg/ha)",
+    y     = "Predicted Yield (mg/ha)"
+  ) +
+  theme_bw()
+```
+
+## GLMNet performance metrics
+
+```{r}
+#| message: false
+#| warning: false
+
+# Show RMSE and R2 for best GLMNet model
+glmnet_tuned %>%
+  collect_metrics() %>%
+  filter(.metric %in% c("rmse", "rsq")) %>%
+  inner_join(best_glmnet) %>%
+  select(.metric, mean, std_err) %>%
+  print()
+```
+
+## Fit GLMNet on all training data and predict 2024
+
+```{r}
+#| message: false
+#| warning: false
+
+# Fit final model on full training data
+final_glmnet_fit = fit(final_glmnet_wf, data = train_df)
+
+# Predict 2024 test data
+glmnet_preds = predict(final_glmnet_fit, new_data = test_df) %>%
+  bind_cols(test_df %>% select(year, site, hybrid)) %>%
+  rename(pred_yield_mg_ha = .pred)
+
+glmnet_preds
+```
+
+## Save GLMNet predictions to submission file
+
+```{r}
+#| message: false
+#| warning: false
+
+# Save GLMNet predictions
+test_sub %>%
+  mutate(yield_mg_ha = glmnet_preds$pred_yield_mg_ha) %>%
+  write_csv("../output/testing_submission_glmnet.csv")
+
+cat("GLMNet predictions saved!\n")
 ```
 

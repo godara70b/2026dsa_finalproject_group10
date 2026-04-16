@@ -5,7 +5,8 @@ format:
     embed-resources: true
     toc: true
     theme: cerulean
-author: FIRST LAST
+author1: Taiwo Owolanke
+author2: Amit Godara
 ---
 
 # A. Introduction  

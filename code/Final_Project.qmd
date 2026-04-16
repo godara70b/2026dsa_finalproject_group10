@@ -1,0 +1,310 @@
+---
+title: "Final Proejct"
+format: html
+editor: visual
+---
+
+# Load packages
+
+```{r}
+#| message: false
+#| message: false
+
+library(tidymodels)
+library(tidyverse)
+library(recipes)  # step_rm, step_impute_* etc.
+library(lubridate)
+library(ranger)
+library(rsample)
+```
+
+# Loading and inspecting the training and testing files
+
+```{r}
+#| message: false
+#| message: false
+
+# list.files("../data/training", full.names = TRUE)
+# list.files("../data/testing", full.names = TRUE)
+
+```
+
+## **Read all 6 CSVs**
+
+```{r}
+#| message: false
+#| message: false
+
+train_meta  = read_csv("../data/training/training_meta.csv")
+train_soil  = read_csv("../data/training/training_soil.csv")
+train_trait = read_csv("../data/training/training_trait.csv")
+
+test_meta   = read_csv("../data/testing/testing_meta.csv")
+test_soil   = read_csv("../data/testing/testing_soil.csv")
+test_sub    = read_csv("../data/testing/testing_submission.csv")
+```
+
+# Inspect column names
+
+```{r}
+#| message: false
+#| message: false
+
+# names(train_meta)
+# names(train_soil)
+# names(train_trait)
+# 
+# names(test_meta)
+# names(test_soil)
+# names(test_sub)
+```
+
+## **Join meta and soil into trait/submission**
+
+```{r}
+#| message: false
+#| message: false
+
+# Combine META and SOIL for training and testing data
+train_env = train_meta %>%
+  left_join(train_soil, by = c("year", "site"))
+
+test_env = test_meta %>%
+  left_join(test_soil, by = c("year", "site"))
+
+# Add env info to trait
+train_df = train_trait %>%
+  left_join(train_env, by = c("year", "site"))
+
+test_df = test_sub %>%
+  left_join(test_env, by = c("year", "site"))
+
+# checks 
+glimpse(train_df)
+glimpse(test_df)
+
+# EDA
+summary(train_df$yield_mg_ha)
+table(train_df$year)
+table(train_df$site)
+```
+
+## **Site-year grouping variable for CV use**
+
+```{r}
+#| message: false
+#| message: false
+
+train_df = train_df %>%
+  mutate(site_year = paste(site, year, sep = "_"))
+train_df
+
+test_df = test_df %>%
+  mutate(site_year = paste(site, year, sep = "_"))
+test_df
+```
+
+## **Tidymodels and set-up of recipe**
+
+```{r}
+#| message: false
+#| message: false
+
+# convert character predictors to factors
+train_df = train_df %>%
+  mutate(
+    site          = factor(site),
+    hybrid        = factor(hybrid),
+    previous_crop = factor(previous_crop),
+    site_year     = factor(site_year)
+  )
+
+test_df = test_df %>%
+  mutate(
+    site          = factor(site),
+    hybrid        = factor(hybrid),
+    previous_crop = factor(previous_crop),
+    site_year     = factor(site_year)
+  )
+
+# date parsing helper funvtion (month.day.year to Date)
+parse_mdy_year = function(x, year) {
+  # x have "5/5/14" format, so I coerce using lubridate::mdy with paste to date 
+  suppressWarnings(
+    lubridate::mdy(paste(x, year))
+  )
+}
+
+# count of predictor columns BEFORE recipe steps
+n_pred = train_df %>%
+  select(-yield_mg_ha, -site_year) %>%
+  ncol()
+
+n_pred
+
+```
+
+# Define a recipe using yield_mg_ha as outcome
+
+```{r}
+#| message: false
+#| message: false
+
+corn_rec = recipe(
+  yield_mg_ha ~ year + site + replicate + block + hybrid +
+    date_planted + date_harvested +
+    grain_moisture +
+    previous_crop + longitude + latitude +
+    soilpH + om_pct + soilk_ppm + soilp_ppm,
+  data = train_df
+) %>%
+  # Convert character predictors to factors
+  step_string2factor(all_nominal_predictors()) %>%
+  
+  # Date variables from the character date columns
+  step_mutate(
+    planted_date   = mdy(date_planted),
+    harvested_date = mdy(date_harvested)
+  ) %>%
+  
+  # Engineer numeric date features
+  step_mutate(
+    doy_planted      = yday(planted_date),
+    doy_harvested    = yday(harvested_date),
+    harvest_interval = as.numeric(harvested_date - planted_date)
+  ) %>%
+  
+  # Remove original string and intermediate Date columns
+  step_rm(date_planted, date_harvested, planted_date, harvested_date) %>%
+  
+  # Impute missing numeric and categorical data
+  step_impute_median(all_numeric_predictors()) %>%   # numeric median imputation[web:37][web:43]
+  step_impute_mode(all_nominal_predictors()) %>%     # mode imputation for factors[web:40]
+  
+  # Dummy categorical predictors encoded
+  step_dummy(all_nominal_predictors())
+
+corn_rec
+
+```
+
+## **Create grouped resampling**
+
+```{r}
+#| message: false
+#| message: false
+
+set.seed(123)
+
+cv_folds = group_vfold_cv(
+  train_df,
+  group = site_year,
+  v = 5
+)
+
+corn_rec
+cv_folds
+
+```
+
+## **Tuned XGBoost model with grouped CV**
+
+```{r}
+#| message: false
+#| message: false
+
+# XGBoost spec with tunable hyperparameters
+xgb_spec = boost_tree(
+  trees          = 1000,
+  tree_depth     = tune(),
+  learn_rate     = tune(),
+  loss_reduction = tune(),
+  min_n          = tune(),
+  sample_size    = tune(),
+  mtry           = tune()
+) %>%
+  set_mode("regression") %>%
+  set_engine("xgboost")
+
+xgb_spec
+```
+
+# XGBoost workflow
+
+```{r}
+#| message: false
+#| message: false
+
+xgb_wf = workflow() %>%
+  add_model(xgb_spec) %>%
+  add_recipe(corn_rec)
+
+xgb_wf
+```
+
+## **Tuning grid for** XGBoost
+
+```{r}
+#| message: false
+#| message: false
+
+set.seed(123)
+
+# Use a Latin space‑filling over a sensible range.
+xgb_grid = grid_space_filling(
+  tree_depth(),
+  learn_rate(range = c(-3, -0.5)),
+  loss_reduction(),
+  min_n(),
+  sample_size = sample_prop(),
+  mtry(range = c(5, min(50, n_pred))),  # use the n_pred counted from train_df
+  size = 30
+)
+
+xgb_grid
+```
+
+# Tune XGBoost with grouped CV
+
+```{r}
+set.seed(123)
+
+xgb_tuned = tune_grid(
+  xgb_wf,
+  resamples = cv_folds,
+  grid      = xgb_grid,
+  metrics   = metric_set(rmse, rsq),
+  control   = control_grid(save_pred = TRUE)
+)
+
+xgb_tuned
+
+collect_metrics(xgb_tuned) %>%
+  filter(.metric == "rmse") %>%
+  arrange(mean)
+
+```
+
+# XGB best parameters
+
+```{r}
+best_xgb = select_best(xgb_tuned, metric = "rmse")
+best_xgb
+
+# Finalize the workflow
+final_xgb_wf = finalize_workflow(xgb_wf, best_xgb)
+```
+
+# Fit on all training data and predict 2024
+
+```{r}
+final_xgb_fit = fit(final_xgb_wf, data = train_df)
+
+xgb_preds = predict(final_xgb_fit, new_data = test_df) %>%
+  bind_cols(test_df %>% select(year, site, hybrid)) %>%
+  rename(pred_yield_mg_ha = .pred)
+
+xgb_preds
+```
+
+## 

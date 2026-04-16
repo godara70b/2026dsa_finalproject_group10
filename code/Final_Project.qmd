@@ -34,13 +34,13 @@ library(rsample)
 #| message: false
 #| warning: false
 
-train_meta  <- read_csv("../data/training/training_meta.csv")
-train_soil  <- read_csv("../data/training/training_soil.csv")
-train_trait <- read_csv("../data/training/training_trait.csv")
+train_meta  = read_csv("../data/training/training_meta.csv")
+train_soil  = read_csv("../data/training/training_soil.csv")
+train_trait = read_csv("../data/training/training_trait.csv")
 
-test_meta   <- read_csv("../data/testing/testing_meta.csv")
-test_soil   <- read_csv("../data/testing/testing_soil.csv")
-test_sub    <- read_csv("../data/testing/testing_submission.csv")
+test_meta   = read_csv("../data/testing/testing_meta.csv")
+test_soil   = read_csv("../data/testing/testing_soil.csv")
+test_sub    = read_csv("../data/testing/testing_submission.csv")
 ```
 
 ## Clean site names and join all files
@@ -49,25 +49,17 @@ test_sub    <- read_csv("../data/testing/testing_submission.csv")
 #| message: false
 #| warning: false
 
-# The data has messy site names across files that need to match before joining.
-# Examples of problems found:
-#   trait has: IAH1a, IAH1b, IAH1c  -> should match meta's: IAH1
-#   trait has: TXH1-Dry, TXH1-Early -> should match meta's: TXH1
-#   meta has:  MOH1- rep 1          -> should match soil's: MOH1
-#   soil has:  IAH1_2015            -> should match meta's: IAH1
-
-# This function cleans all of those patterns to a common base site name
-clean_site <- function(s) {
-  s <- str_remove(s, "_\\d{4}$")          # removes _2015 etc  (soil)
-  s <- str_remove(s, "[abc]$")            # removes trailing a/b/c  (trait)
-  s <- str_remove(s, "-\\s*(Dry|Early|Late)")   # removes -Dry/-Early/-Late  (trait)
-  s <- str_remove(s, "\\s*-?\\s*rep\\s*\\d+")  # removes rep 1 / rep 2  (meta)
-  s <- str_remove(s, "_[12]$")            # removes _1 or _2 at end
+clean_site = function(s) {
+  s <- str_remove(s, "_\\d{4}$")         
+  s <- str_remove(s, "[abc]$")            
+  s <- str_remove(s, "-\\s*(Dry|Early|Late)")   
+  s <- str_remove(s, "\\s*-?\\s*rep\\s*\\d+")  
+  s <- str_remove(s, "_[12]$")            
   str_trim(s)
 }
 
-# --- Clean and deduplicate training meta ---
-train_meta_clean <- train_meta %>%
+# Clean and deduplicate training meta
+train_meta_clean = train_meta %>%
   mutate(site = clean_site(site)) %>%
   group_by(year, site) %>%
   summarise(
@@ -77,8 +69,8 @@ train_meta_clean <- train_meta %>%
     .groups       = "drop"
   )
 
-# --- Clean and deduplicate training soil ---
-train_soil_clean <- train_soil %>%
+# Clean and deduplicate training soil
+train_soil_clean = train_soil %>%
   mutate(site = clean_site(site)) %>%
   group_by(year, site) %>%
   summarise(
@@ -89,8 +81,8 @@ train_soil_clean <- train_soil %>%
     .groups   = "drop"
   )
 
-# --- Clean testing soil ---
-test_soil_clean <- test_soil %>%
+# Clean testing soil
+test_soil_clean = test_soil %>%
   mutate(site = clean_site(site)) %>%
   group_by(year, site) %>%
   summarise(
@@ -101,21 +93,21 @@ test_soil_clean <- test_soil %>%
     .groups   = "drop"
   )
 
-# --- Clean site in trait before joining ---
-train_trait_clean <- train_trait %>%
+# Clean site in trait before joining
+train_trait_clean = train_trait %>%
   mutate(site = clean_site(site))
 
-# --- Build training dataset: trait + meta + soil ---
-train_df <- train_trait_clean %>%
+# Build training dataset: trait + meta + soil
+train_df = train_trait_clean %>%
   left_join(train_meta_clean,  by = c("year", "site")) %>%
   left_join(train_soil_clean,  by = c("year", "site"))
 
-# --- Build testing dataset: submission + meta + soil ---
-test_df <- test_sub %>%
+# build testing dataset: submission + meta + soil
+test_df = test_sub %>%
   left_join(test_meta,         by = c("year", "site")) %>%
   left_join(test_soil_clean,   by = c("year", "site"))
 
-# --- Check results ---
+#  Check results 
 cat("Training rows:", nrow(train_df), "\n")
 cat("Testing rows:",  nrow(test_df),  "\n")
 
@@ -140,10 +132,10 @@ test_df %>%
 #| message: false
 #| warning: false
 
-train_df <- train_df %>%
+train_df = train_df %>%
   mutate(site_year = paste(site, year, sep = "_"))
 
-test_df <- test_df %>%
+test_df = test_df %>%
   mutate(site_year = paste(site, year, sep = "_"))
 ```
 
@@ -153,7 +145,7 @@ test_df <- test_df %>%
 #| message: false
 #| warning: false
 
-train_df <- train_df %>%
+train_df = train_df %>%
   mutate(
     site          = factor(site),
     hybrid        = factor(hybrid),
@@ -161,7 +153,7 @@ train_df <- train_df %>%
     site_year     = factor(site_year)
   )
 
-test_df <- test_df %>%
+test_df = test_df %>%
   mutate(
     site          = factor(site),
     hybrid        = factor(hybrid),
@@ -173,7 +165,7 @@ test_df <- test_df %>%
 ## Count predictors (needed for mtry in XGBoost grid)
 
 ```{r}
-n_pred <- train_df %>%
+n_pred = train_df %>%
   select(-yield_mg_ha, -site_year) %>%
   ncol()
 

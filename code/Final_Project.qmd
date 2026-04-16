@@ -1,5 +1,5 @@
 ---
-title: "Final Proejct"
+title: "Final Project"
 format: html
 editor: visual
 ---
@@ -12,13 +12,13 @@ editor: visual
 
 library(tidymodels)
 library(tidyverse)
-library(recipes)  # step_rm, step_impute_* etc.
+library(recipes)  # step_rm to work
 library(lubridate)
 library(ranger)
 library(rsample)
 ```
 
-# Loading and inspecting the training and testing files
+# Loading and inspecting the training and testing data files
 
 ```{r}
 #| message: false
@@ -29,7 +29,7 @@ library(rsample)
 
 ```
 
-## **Read all 6 CSVs**
+## **Read all CSV files**
 
 ```{r}
 #| message: false
@@ -59,7 +59,7 @@ test_sub    = read_csv("../data/testing/testing_submission.csv")
 # names(test_sub)
 ```
 
-## **Join meta and soil into trait/submission**
+## **Combine meta and soil data into the trait**
 
 ```{r}
 #| message: false
@@ -89,7 +89,7 @@ table(train_df$year)
 table(train_df$site)
 ```
 
-## **Site-year grouping variable for CV use**
+## **Grouping of the site-year variable for CV use**
 
 ```{r}
 #| message: false
@@ -144,7 +144,7 @@ n_pred
 
 ```
 
-# Define a recipe using yield_mg_ha as outcome
+# Define a recipe using yield_mg_ha as the outcome
 
 ```{r}
 #| message: false
@@ -250,7 +250,7 @@ xgb_wf
 
 set.seed(123)
 
-# Use a Latin space‑filling over a sensible range.
+# Use Latin space‑filling over a range in the tuning
 xgb_grid = grid_space_filling(
   tree_depth(),
   learn_rate(range = c(-3, -0.5)),

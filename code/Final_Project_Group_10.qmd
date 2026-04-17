@@ -1,5 +1,5 @@
 ---
-title: "Final Project"
+title: "Final Project Group 10"
 format: html
 editor: visual
 author1: Taiwo Owolanke
@@ -22,6 +22,7 @@ author2: Amit Godara
 
 library(tidymodels)
 library(tidyverse)    # Data wrangling and visualization
+library(finetune)     # Additional tuning strategies (e.g racing, ANOVA-based tuning)
 library(recipes)  # step_rm to work
 library(lubridate)
 library(ranger)       # Fast implementation of Random Forests
@@ -31,6 +32,7 @@ library(glmnet)
 library(vip)          # For plotting variable importance from fitted models
 library(xgboost)      # XGBoost implementation in R
 library(doParallel)   # For parallel computing (useful during resampling/tuning)
+library(dplyr)
 
 library(here)         # Gives the absolute path starting from Rproj, works well with different scripts (R, .rmd or .qmd)
 library(quarto)       # helps to export the qmd script to R script
@@ -39,8 +41,7 @@ library(quarto)       # helps to export the qmd script to R script
 here::here()
 ```
 
-# Loading and inspecting the training and testing data files
-
+## **Loading and inspecting the training and testing data files**
 ```{r}
 #| message: false
 #| warning: false
@@ -51,7 +52,6 @@ here::here()
 ```
 
 ## **Read all CSV files**
-
 ```{r}
 #| message: false
 #| warning: false
@@ -65,8 +65,8 @@ test_soil   = read_csv(here("data/testing", "testing_soil.csv"))
 test_sub    = read_csv(here("data/testing", "testing_submission.csv"))
 ```
 
+## **Pre-processing**
 ## Clean site names and join all files
-
 ```{r}
 #| message: false
 #| warning: false
@@ -149,7 +149,6 @@ test_df %>%
 ```
 
 ## Add site_year grouping variable
-
 ```{r}
 #| message: false
 #| warning: false
@@ -162,7 +161,6 @@ test_df = test_df %>%
 ```
 
 ## Convert character columns to factors
-
 ```{r}
 #| message: false
 #| warning: false
@@ -184,8 +182,32 @@ test_df = test_df %>%
   )
 ```
 
-## Count predictors (needed for mtry in XGBoost grid)
+# Distribution of target variable
+```{r distribution}
+#| message: false
+#| warning: false
 
+density_plot <- ggplot() +
+  geom_density(data = train_df, 
+               aes(x = yield_mg_ha),
+               color = "red") +
+  # geom_density(data = test_df, 
+  #              aes(x = yield_mg_ha),
+  #              color = "blue") 
+# test data has X variable as NA's, so omitted
+  
+# lets print the undergoing process in the console, (important when running in the terminal later on)
+cat(paste0("Saving...... density plot of train data"))
+
+ggsave(plot = density_plot, 
+       path = here("output", "png"),
+       filename = "density_plot_train.png",
+       height = 6,
+       width = 9,
+       dpi = 600)
+```
+
+## Count predictors (needed for mtry in XGBoost grid)
 ```{r}
 n_pred = train_df %>%
   select(-yield_mg_ha, -site_year) %>%
@@ -195,7 +217,6 @@ cat("Number of predictors:", n_pred, "\n")
 ```
 
 ## Pull weather data using nasapower
-
 ```{# {r}
 # #| message: false
 # #| warning: false
@@ -300,8 +321,8 @@ cat("Number of predictors:", n_pred, "\n")
 # cat("Saved to ../data/weather_season_summary.csv\n")
 ```
 
-## Load weather and join to training and testing data
 
+## Load weather data and combine with training and testing data
 ```{r}
 #| message: false
 #| warning: false
@@ -338,10 +359,11 @@ cat("\nUpdated number of predictors:", n_pred, "\n")
 ```
 
 # Define a recipe using yield_mg_ha as the outcome
-
 ```{r}
 #| message: false
 #| warning: false
+
+cat("\nCreate recipe for data preprocessing\n")
 
 corn_rec = recipe(
   yield_mg_ha ~ year + site + replicate + block + hybrid + date_planted + 
@@ -377,11 +399,18 @@ corn_rec = recipe(
   step_dummy(all_nominal_predictors())
 
 corn_rec
+```
 
+```{r corn_prep}
+# Prep the recipe to estimate any required statistics
+corn_prep <- corn_rec %>% 
+  prep()
+
+# Examine preprocessing steps
+corn_prep
 ```
 
 ## **Create grouped resampling**
-
 ```{r}
 #| message: false
 #| warning: false
@@ -398,17 +427,20 @@ cv_folds
 ```
 
 # Model 1: **XGBoost** 
-
 ```{r}
 #| message: false
 #| warning: false
 
 # XGBoost spec with tunable hyperparameters
 xgb_spec = boost_tree(
+  # Total number of boosting iterations
   trees          = 1000,
+  # Maximum depth of each tree
   tree_depth     = tune(),
+  # Step size shrinkage for each boosting step
   learn_rate     = tune(),
   loss_reduction = tune(),
+  # Minimum samples required to split a node
   min_n          = tune(),
   sample_size    = tune(),
   mtry           = tune()
@@ -420,7 +452,6 @@ xgb_spec
 ```
 
 # XGBoost workflow
-
 ```{r}
 #| message: false
 #| warning: false
@@ -455,6 +486,7 @@ xgb_grid = grid_space_filling(
 xgb_grid
 ```
 
+
 ```{r}
 ggplot(data = xgb_grid,
        aes(x = tree_depth, 
@@ -465,8 +497,28 @@ ggplot(data = xgb_grid,
              show.legend = FALSE)
 ```
 
-# Tune XGBoost with grouped CV folds
 
+# Detecting total cores
+```{r}
+# This help us to detect the total number of available cores and then do a parallel processing on each of them
+# Detect Cores for Slurm (Cluster - Sapelo2)
+
+# lets look into our current environment to see the available cores
+n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_ON_NODE"))
+
+if (is.na(n_cores)) n_cores <- parallel::detectCores() - 1
+
+# Start the Cluster
+cl <- makePSOCKcluster(n_cores)
+
+registerDoParallel(cl)
+
+cat(paste0("\nFound and registered ", n_cores, " cores to work with\n"))
+
+```
+
+
+# Tune XGBoost with grouped CV folds
 ```{r}
 set.seed(123)
 
@@ -483,11 +535,9 @@ xgb_tuned
 collect_metrics(xgb_tuned) %>%
   filter(.metric == "rmse") %>%
   arrange(mean)
-
 ```
 
 # XGB best parameters
-
 ```{r}
 best_xgb = select_best(xgb_tuned, metric = "rmse")
 best_xgb
@@ -497,7 +547,6 @@ final_xgb_wf = finalize_workflow(xgb_wf, best_xgb)
 ```
 
 # Predicted vs observed on CV predictions
-
 ```{r}
 xgb_tuned %>%
   collect_predictions() %>%
@@ -524,13 +573,13 @@ xgb_preds
 ```
 
 ## Vip
-
 ```{r}
 final_xgb_fit %>%
   extract_fit_parsnip() %>%
   vip(num_features = 15) +
   labs(title = "XGBoost Variable Importance")
 ```
+
 
 ```{r}
 # Save final predictions to submission file
@@ -540,7 +589,6 @@ test_sub %>%
 ```
 
 # Model 2: GLMNet
-
 ```{r}
 #| message: false
 #| warning: false
@@ -559,7 +607,6 @@ glmnet_spec
 ```
 
 ## GLMNet recipe
-
 ```{r}
 #| message: false
 #| warning: false

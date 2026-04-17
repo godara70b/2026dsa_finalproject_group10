@@ -2,27 +2,48 @@
 title: "Final Project"
 format: html
 editor: visual
+author1: Taiwo Owolanke
+author2: Amit Godara
 ---
 
-# Load packages
+```{r} # shared_lib_path <- "/work/crss8030/instructor_data/shared_R_libs"  #class_packages <- c("tidymodels", "tidyverse", "vip", "ranger", "finetune", "parsnip", "reticulate", "xgboost", "doParallel", "lme4", "here")  #install.packages(class_packages, lib = shared_lib_path)}
+```
+
+# Locate the installed libraries (important step while running the script in cluster - sapelo2)
+
+```{r} # .libPaths(c("/work/crss8030/instructor_data/shared_R_libs", .libPaths()))}
+```
+
+# Load packages/Libraries
 
 ```{r}
 #| message: false
-#| message: false
+#| warning: false
 
 library(tidymodels)
-library(tidyverse)
+library(tidyverse)    # Data wrangling and visualization
 library(recipes)  # step_rm to work
 library(lubridate)
-library(ranger)
+library(ranger)       # Fast implementation of Random Forests
 library(rsample)
+library(nasapower)
+library(glmnet)
+library(vip)          # For plotting variable importance from fitted models
+library(xgboost)      # XGBoost implementation in R
+library(doParallel)   # For parallel computing (useful during resampling/tuning)
+
+library(here)         # Gives the absolute path starting from Rproj, works well with different scripts (R, .rmd or .qmd)
+library(quarto)       # helps to export the qmd script to R script
+#library(caret)       # Other great library for Machine Learning 
+
+here::here()
 ```
 
 # Loading and inspecting the training and testing data files
 
 ```{r}
 #| message: false
-#| message: false
+#| warning: false
 
 # list.files("../data/training", full.names = TRUE)
 # list.files("../data/testing", full.names = TRUE)
@@ -30,17 +51,18 @@ library(rsample)
 ```
 
 ## **Read all CSV files**
+
 ```{r}
 #| message: false
 #| warning: false
 
-train_meta  = read_csv("../data/training/training_meta.csv")
-train_soil  = read_csv("../data/training/training_soil.csv")
-train_trait = read_csv("../data/training/training_trait.csv")
+train_meta  = read_csv(here("data/training", "training_meta.csv"))
+train_soil  = read_csv(here("data/training", "training_soil.csv"))
+train_trait = read_csv(here("data/training", "training_trait.csv"))
 
-test_meta   = read_csv("../data/testing/testing_meta.csv")
-test_soil   = read_csv("../data/testing/testing_soil.csv")
-test_sub    = read_csv("../data/testing/testing_submission.csv")
+test_meta   = read_csv(here("data/testing", "testing_meta.csv"))
+test_soil   = read_csv(here("data/testing", "testing_soil.csv"))
+test_sub    = read_csv(here("data/testing", "testing_submission.csv"))
 ```
 
 ## Clean site names and join all files
@@ -171,112 +193,111 @@ n_pred = train_df %>%
 
 cat("Number of predictors:", n_pred, "\n")
 ```
+
 ## Pull weather data using nasapower
 
-```{r}
-#| message: false
-#| warning: false
-#| eval: false   
-
-library(nasapower)
-
-# Get unique site-year-lat-lon from BOTH training and testing meta
-# We need weather for every site-year we have coordinates for
-sites_train = train_meta_clean %>%
-  filter(!is.na(latitude), !is.na(longitude)) %>%
-  select(year, site, latitude, longitude) %>%
-  distinct()
-
-sites_test = test_meta %>%
-  select(year, site, latitude, longitude) %>%
-  filter(!is.na(latitude), !is.na(longitude)) %>%
-  distinct()
-
-all_sites = bind_rows(sites_train, sites_test) %>%
-  distinct(year, site, .keep_all = TRUE)
-
-cat("Total site-years to pull weather for:", nrow(all_sites), "\n")
-
-# Function to pull growing season weather for one site-year
-# Corn growing season = May (day 121) to October (day 304)
-pull_weather = function(year, lat, lon, site) {
-  
-  tryCatch({
-    raw = get_power(
-      community  = "AG",
-      lonlat     = c(lon, lat),
-      pars       = c("T2M_MAX",   # daily max temperature (C)
-                     "T2M_MIN",   # daily min temperature (C)  
-                     "PRECTOTCORR", # precipitation (mm/day)
-                     "ALLSKY_SFC_SW_DWN"), # solar radiation (MJ/m2/day)
-      dates      = c(paste0(year, "-05-01"),   # May 1
-                     paste0(year, "-10-31")),  # Oct 31
-      temporal_api = "daily"
-    )
-    
-    raw %>%
-      mutate(
-        site = site,
-        year = year,
-        # Growing degree days for corn (base 10C, max 30C)
-        tmax_capped = pmin(T2M_MAX, 30),
-        tmin_capped = pmax(T2M_MIN, 10),
-        gdd = pmax((tmax_capped + tmin_capped) / 2 - 10, 0)
-      ) %>%
-      group_by(year, site) %>%
-      summarise(
-        # Temperature summaries
-        tmean_season   = mean((T2M_MAX + T2M_MIN) / 2, na.rm = TRUE),
-        tmax_mean      = mean(T2M_MAX, na.rm = TRUE),
-        tmin_mean      = mean(T2M_MIN, na.rm = TRUE),
-        # Heat stress: days where max temp > 35C
-        heat_stress_days = sum(T2M_MAX > 35, na.rm = TRUE),
-        # Growing degree days (accumulated)
-        gdd_total      = sum(gdd, na.rm = TRUE),
-        # Precipitation
-        precip_total   = sum(PRECTOTCORR, na.rm = TRUE),
-        # Solar radiation
-        srad_mean      = mean(ALLSKY_SFC_SW_DWN, na.rm = TRUE),
-        .groups = "drop"
-      )
-    
-  }, error = function(e) {
-    message("Failed for site=", site, " year=", year, ": ", e$message)
-    return(NULL)
-  })
-}
-
-# Pull weather for all site-years
-cat("Pulling weather data... this takes ~5-10 minutes\n")
-
-weather_list <- vector("list", nrow(all_sites))
-
-for (i in seq_len(nrow(all_sites))) {
-  cat("Pulling", i, "of", nrow(all_sites), 
-      "| site:", all_sites$site[i], 
-      "| year:", all_sites$year[i], "\n")
-  
-  weather_list[[i]] <- pull_weather(
-    year = all_sites$year[i],
-    lat  = all_sites$latitude[i],
-    lon  = all_sites$longitude[i],
-    site = all_sites$site[i]
-  )
-  
- 
-  Sys.sleep(0.5)
-}
-
-# Combine all results
-weather_df <- bind_rows(weather_list)
-
-cat("Weather data pulled successfully!\n")
-cat("Rows:", nrow(weather_df), "\n")
-cat("Columns:", ncol(weather_df), "\n")
-
-# Save to file
-write_csv(weather_df, "../data/weather_season_summary.csv")
-cat("Saved to ../data/weather_season_summary.csv\n")
+```{# {r}
+# #| message: false
+# #| warning: false
+# #| eval: false   
+# 
+# # Get unique site-year-lat-lon from BOTH training and testing meta
+# # We need weather for every site-year we have coordinates for
+# sites_train = train_meta_clean %>%
+#   filter(!is.na(latitude), !is.na(longitude)) %>%
+#   select(year, site, latitude, longitude) %>%
+#   distinct()
+# 
+# sites_test = test_meta %>%
+#   select(year, site, latitude, longitude) %>%
+#   filter(!is.na(latitude), !is.na(longitude)) %>%
+#   distinct()
+# 
+# all_sites = bind_rows(sites_train, sites_test) %>%
+#   distinct(year, site, .keep_all = TRUE)
+# 
+# cat("Total site-years to pull weather for:", nrow(all_sites), "\n")
+# 
+# # Function to pull growing season weather for one site-year
+# # Corn growing season = May (day 121) to October (day 304)
+# pull_weather = function(year, lat, lon, site) {
+#   
+#   tryCatch({
+#     raw = get_power(
+#       community  = "AG",
+#       lonlat     = c(lon, lat),
+#       pars       = c("T2M_MAX",   # daily max temperature (C)
+#                      "T2M_MIN",   # daily min temperature (C)  
+#                      "PRECTOTCORR", # precipitation (mm/day)
+#                      "ALLSKY_SFC_SW_DWN"), # solar radiation (MJ/m2/day)
+#       dates      = c(paste0(year, "-05-01"),   # May 1
+#                      paste0(year, "-10-31")),  # Oct 31
+#       temporal_api = "daily"
+#     )
+#     
+#     raw %>%
+#       mutate(
+#         site = site,
+#         year = year,
+#         # Growing degree days for corn (base 10C, max 30C)
+#         tmax_capped = pmin(T2M_MAX, 30),
+#         tmin_capped = pmax(T2M_MIN, 10),
+#         gdd = pmax((tmax_capped + tmin_capped) / 2 - 10, 0)
+#       ) %>%
+#       group_by(year, site) %>%
+#       summarise(
+#         # Temperature summaries
+#         tmean_season   = mean((T2M_MAX + T2M_MIN) / 2, na.rm = TRUE),
+#         tmax_mean      = mean(T2M_MAX, na.rm = TRUE),
+#         tmin_mean      = mean(T2M_MIN, na.rm = TRUE),
+#         # Heat stress: days where max temp > 35C
+#         heat_stress_days = sum(T2M_MAX > 35, na.rm = TRUE),
+#         # Growing degree days (accumulated)
+#         gdd_total      = sum(gdd, na.rm = TRUE),
+#         # Precipitation
+#         precip_total   = sum(PRECTOTCORR, na.rm = TRUE),
+#         # Solar radiation
+#         srad_mean      = mean(ALLSKY_SFC_SW_DWN, na.rm = TRUE),
+#         .groups = "drop"
+#       )
+#     
+#   }, error = function(e) {
+#     message("Failed for site=", site, " year=", year, ": ", e$message)
+#     return(NULL)
+#   })
+# }
+# 
+# # Pull weather for all site-years
+# cat("Pulling weather data... this takes ~5-10 minutes\n")
+# 
+# weather_list <- vector("list", nrow(all_sites))
+# 
+# for (i in seq_len(nrow(all_sites))) {
+#   cat("Pulling", i, "of", nrow(all_sites), 
+#       "| site:", all_sites$site[i], 
+#       "| year:", all_sites$year[i], "\n")
+#   
+#   weather_list[[i]] <- pull_weather(
+#     year = all_sites$year[i],
+#     lat  = all_sites$latitude[i],
+#     lon  = all_sites$longitude[i],
+#     site = all_sites$site[i]
+#   )
+#   
+#  
+#   Sys.sleep(0.5)
+# }
+# 
+# # Combine all results
+# weather_df <- bind_rows(weather_list)
+# 
+# cat("Weather data pulled successfully!\n")
+# cat("Rows:", nrow(weather_df), "\n")
+# cat("Columns:", ncol(weather_df), "\n")
+# 
+# # Save to file
+# write_csv(weather_df, "../data/weather_season_summary.csv")
+# cat("Saved to ../data/weather_season_summary.csv\n")
 ```
 
 ## Load weather and join to training and testing data
@@ -286,7 +307,7 @@ cat("Saved to ../data/weather_season_summary.csv\n")
 #| warning: false
 
 # Load the saved weather file
-weather_df = read_csv("../data/weather_season_summary.csv")
+weather_df = read_csv(here("data", "weather_season_summary.csv"))
 
 # Join weather to training data
 train_df = train_df %>%
@@ -316,20 +337,16 @@ n_pred = train_df %>%
 cat("\nUpdated number of predictors:", n_pred, "\n")
 ```
 
-
 # Define a recipe using yield_mg_ha as the outcome
 
 ```{r}
 #| message: false
-#| message: false
+#| warning: false
 
 corn_rec = recipe(
-  yield_mg_ha ~ year + site + replicate + block + hybrid +
-    date_planted + date_harvested +
-    grain_moisture +
-    previous_crop + longitude + latitude +
-    soilpH + om_pct + soilk_ppm + soilp_ppm +
-    tmean_season + tmax_mean + tmin_mean +
+  yield_mg_ha ~ year + site + replicate + block + hybrid + date_planted + 
+    date_harvested + grain_moisture + previous_crop + longitude + latitude + soilpH + 
+    om_pct + soilk_ppm + soilp_ppm + tmean_season + tmax_mean + tmin_mean + 
     heat_stress_days + gdd_total + precip_total + srad_mean,
   data = train_df
 ) %>%
@@ -367,7 +384,7 @@ corn_rec
 
 ```{r}
 #| message: false
-#| message: false
+#| warning: false
 
 set.seed(123)
 
@@ -376,17 +393,15 @@ cv_folds = group_vfold_cv(
   group = site_year,
   v = 5
 )
-
-corn_rec
 cv_folds
 
 ```
 
-## **Tuned XGBoost model with grouped CV**
+# Model 1: **XGBoost** 
 
 ```{r}
 #| message: false
-#| message: false
+#| warning: false
 
 # XGBoost spec with tunable hyperparameters
 xgb_spec = boost_tree(
@@ -408,7 +423,7 @@ xgb_spec
 
 ```{r}
 #| message: false
-#| message: false
+#| warning: false
 
 xgb_wf = workflow() %>%
   add_model(xgb_spec) %>%
@@ -417,11 +432,11 @@ xgb_wf = workflow() %>%
 xgb_wf
 ```
 
-## **Tuning grid for** XGBoost
+## **Tuning** XGBoost **grid**
 
 ```{r}
 #| message: false
-#| message: false
+#| warning: false
 
 set.seed(123)
 
@@ -429,6 +444,7 @@ set.seed(123)
 xgb_grid = grid_space_filling(
   tree_depth(),
   learn_rate(range = c(-3, -0.5)),
+  trees(),
   loss_reduction(),
   min_n(),
   sample_size = sample_prop(),
@@ -439,7 +455,17 @@ xgb_grid = grid_space_filling(
 xgb_grid
 ```
 
-# Tune XGBoost with grouped CV
+```{r}
+ggplot(data = xgb_grid,
+       aes(x = tree_depth, 
+           y = min_n)) +
+  geom_point(aes(color = factor(learn_rate),
+                 size = trees),
+             alpha = .5,
+             show.legend = FALSE)
+```
+
+# Tune XGBoost with grouped CV folds
 
 ```{r}
 set.seed(123)
@@ -471,6 +497,7 @@ final_xgb_wf = finalize_workflow(xgb_wf, best_xgb)
 ```
 
 # Predicted vs observed on CV predictions
+
 ```{r}
 xgb_tuned %>%
   collect_predictions() %>%
@@ -483,8 +510,6 @@ xgb_tuned %>%
        x = "Observed Yield (mg/ha)",
        y = "Predicted Yield (mg/ha)")
 ```
-
-
 
 # Fit on all training data and predict 2024
 
@@ -499,8 +524,8 @@ xgb_preds
 ```
 
 ## Vip
+
 ```{r}
-library(vip)
 final_xgb_fit %>%
   extract_fit_parsnip() %>%
   vip(num_features = 15) +
@@ -514,43 +539,12 @@ test_sub %>%
   write_csv("../output/testing_submission_filled_xgb.csv")
 ```
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# machine learning models: GLMNet
-
+# Model 2: GLMNet
 
 ```{r}
 #| message: false
 #| warning: false
-
-library(glmnet)
-library(tidyverse)
-library(tidymodels)
+#| 
 # GLMNet has only 2 hyperparameters:
 # penalty  = how much to shrink coefficients (lambda)
 # mixture  = 0 is pure Ridge, 1 is pure Lasso, 0.5 is Elastic Net
@@ -773,3 +767,6 @@ test_sub %>%
 cat("GLMNet predictions saved!\n")
 ```
 
+```{r}
+knitr::purl("Final_Project_Group_10.qmd", output = "final_project_group_10_sapelo_script.R", documentation = 0)
+```

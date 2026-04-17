@@ -487,7 +487,10 @@ xgb_grid
 ```
 
 
+## Hyperparameter grid visualization
 ```{r}
+# explore how different tuning settings relate to each other
+
 ggplot(data = xgb_grid,
        aes(x = tree_depth, 
            y = min_n)) +

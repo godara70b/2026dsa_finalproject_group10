@@ -36,7 +36,10 @@ library(dplyr)
 
 library(here)         # Gives the absolute path starting from Rproj, works well with different scripts (R, .rmd or .qmd)
 library(quarto)       # helps to export the qmd script to R script
-#library(caret)       # Other great library for Machine Learning 
+#library(caret)       # Other great library for Machine Learning
+library(janitor)
+library(stringr)
+library(tidyr)
 
 here::here()
 ```
@@ -71,81 +74,213 @@ test_sub    = read_csv(here("data/testing", "testing_submission.csv"))
 #| message: false
 #| warning: false
 
-clean_site = function(s) {
-  s <- str_remove(s, "_\\d{4}$")         
-  s <- str_remove(s, "[abc]$")            
-  s <- str_remove(s, "-\\s*(Dry|Early|Late)")   
-  s <- str_remove(s, "\\s*-?\\s*rep\\s*\\d+")  
-  s <- str_remove(s, "_[12]$")            
-  str_trim(s)
+# site extraction functions
+extract_site_base <- function(x) {
+  x %>%
+    str_to_lower() %>%
+    str_extract("^[a-z]{2,3}h\\d+") %>%
+    str_to_upper()
 }
 
-# Clean and deduplicate training meta
-train_meta_clean = train_meta %>%
-  mutate(site = clean_site(site)) %>%
-  group_by(year, site) %>%
+make_site_year <- function(year, site_base) {
+  paste(year, site_base, sep = "_")
+}
+
+# clean training trait data
+train_trait_clean <- train_trait %>%
+  clean_names() %>%
+  mutate(
+    site_base = extract_site_base(site),
+    site_year = make_site_year(year, site_base),
+
+    treatment = case_when(
+      str_detect(str_to_lower(site), "dry")   ~ "dry",
+      str_detect(str_to_lower(site), "early") ~ "early",
+      str_detect(str_to_lower(site), "late")  ~ "late",
+      TRUE ~ "normal"
+    ),
+
+    date_harvested = mdy(date_harvested)
+  ) %>%
+  filter(!is.na(site_base))   # drop malformed site names early
+
+# clean training meta data at site level only
+train_meta_clean <- train_meta %>%
+  clean_names() %>%
+  mutate(site_base = extract_site_base(site)) %>%
+  filter(!is.na(site_base)) %>%
+  group_by(site_base) %>%
+  summarise(
+    previous_crop = first(na.omit(previous_crop)),
+    longitude     = mean(longitude, na.rm = TRUE),
+    latitude      = mean(latitude, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# clean training soil data at site level only
+train_soil_clean <- train_soil %>%
+  clean_names() %>%
+  mutate(site_base = extract_site_base(site)) %>%
+  filter(!is.na(site_base)) %>%
+  group_by(site_base) %>%
+  summarise(
+    soilpH    = mean(soilp_h, na.rm = TRUE),
+    om_pct    = mean(om_pct, na.rm = TRUE),
+    soilk_ppm = mean(soilk_ppm, na.rm = TRUE),
+    soilp_ppm = mean(soilp_ppm, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# identify valid sites
+valid_sites <- train_trait_clean %>%
+  distinct(site_base) %>%
+  inner_join(train_meta_clean, by = "site_base") %>%
+  inner_join(train_soil_clean, by = "site_base")
+
+# join training traits, meta and soil cleaned data
+train_df <- train_trait_clean %>%
+  semi_join(valid_sites, by = "site_base") %>%  # keep only valid sites
+  left_join(train_meta_clean, by = "site_base") %>%
+  left_join(train_soil_clean, by = "site_base")
+
+# debug missing sites
+missing_sites = train_trait_clean %>%
+  distinct(site_base) %>%
+  anti_join(train_meta_clean, by = "site_base")
+
+print(missing_sites)
+
+soil_vars <- c("soilpH", "om_pct", "soilk_ppm", "soilp_ppm")
+
+# global medians as named vector
+global_medians <- train_df %>%
+  summarise(across(all_of(soil_vars), ~ median(.x, na.rm = TRUE))) %>%
+  unlist()
+
+train_df <- train_df %>%
+  group_by(site_base) %>%
+  mutate(across(
+    all_of(soil_vars),
+    ~ ifelse(
+        is.na(.x),
+        ifelse(
+          all(is.na(.x)),
+          global_medians[[cur_column()]],   # fallback to global
+          median(.x, na.rm = TRUE)         # site-level median
+        ),
+        .x
+      )
+  )) %>%
+  ungroup()
+
+train_df <- train_df %>%
+  mutate(previous_crop = replace_na(previous_crop, "unknown"))
+
+# drop data having missing harvest dates
+train_df <- train_df %>%
+  filter(!is.na(date_harvested))
+
+# drop missing sites not in train data and train meta data
+train_df <- train_df %>%
+  filter(!site_base %in% missing_sites)
+
+na_check <- train_df %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "n_NA") %>%
+  filter(n_NA > 0)
+
+print(na_check)
+
+cat("Training rows:", nrow(train_df), "\n")
+glimpse(train_df)
+```
+
+
+```{r}
+#| message: false
+#| warning: false
+
+# site cleaner and extraction function to match train data
+extract_site_base <- function(s) {
+  s %>%
+    str_to_lower() %>%
+    str_extract("^[a-z]{2,3}h\\d+") %>%
+    str_to_upper()
+}
+
+# clean test soil data
+test_soil_clean <- test_soil %>%
+  clean_names() %>%
+  mutate(site_base = extract_site_base(site)) %>%
+  group_by(year, site_base) %>%
+  summarise(
+    soilpH    = mean(soilp_h, na.rm = TRUE),
+    om_pct    = mean(om_pct, na.rm = TRUE),
+    soilk_ppm = mean(soilk_ppm, na.rm = TRUE),
+    soilp_ppm = mean(soilp_ppm, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# clean test meta
+test_meta_clean <- test_meta %>%
+  clean_names() %>%
+  mutate(
+    previous_crop = str_to_lower(previous_crop),
+    site_base = extract_site_base(site)
+  ) %>%
+  group_by(year, site_base) %>%
   summarise(
     previous_crop = first(previous_crop),
-    longitude     = mean(longitude, na.rm = TRUE),
-    latitude      = mean(latitude,  na.rm = TRUE),
-    .groups       = "drop"
+    longitude = mean(longitude, na.rm = TRUE),
+    latitude  = mean(latitude,  na.rm = TRUE),
+    .groups = "drop"
   )
 
-# Clean and deduplicate training soil
-train_soil_clean = train_soil %>%
-  mutate(site = clean_site(site)) %>%
-  group_by(year, site) %>%
-  summarise(
-    soilpH    = mean(soilpH,    na.rm = TRUE),
-    om_pct    = mean(om_pct,    na.rm = TRUE),
-    soilk_ppm = mean(soilk_ppm, na.rm = TRUE),
-    soilp_ppm = mean(soilp_ppm, na.rm = TRUE),
-    .groups   = "drop"
+# clean test submission data
+test_sub_clean <- test_sub %>%
+  clean_names() %>%
+  mutate(
+    site_base = extract_site_base(site)
   )
 
-# Clean testing soil
-test_soil_clean = test_soil %>%
-  mutate(site = clean_site(site)) %>%
-  group_by(year, site) %>%
-  summarise(
-    soilpH    = mean(soilpH,    na.rm = TRUE),
-    om_pct    = mean(om_pct,    na.rm = TRUE),
-    soilk_ppm = mean(soilk_ppm, na.rm = TRUE),
-    soilp_ppm = mean(soilp_ppm, na.rm = TRUE),
-    .groups   = "drop"
-  )
+# build test data set
+test_df <- test_sub_clean %>%
+  
+  # join meta and soil
+  left_join(test_meta_clean, by = c("year", "site_base")) %>%
+  left_join(test_soil_clean, by = c("year", "site_base")) %>%
+  
+  # handle missing value
+  mutate(
+    previous_crop = replace_na(previous_crop, "unknown"),
+    
+    across(
+      c(soilpH, om_pct, soilk_ppm, soilp_ppm),
+      ~ replace_na(., mean(., na.rm = TRUE))
+    )
+  ) %>%
+  
+  # fill lat/long within site
+  group_by(site_base) %>%
+  mutate(
+    longitude = ifelse(is.na(longitude),
+                       mean(longitude, na.rm = TRUE),
+                       longitude),
+    latitude = ifelse(is.na(latitude),
+                      mean(latitude, na.rm = TRUE),
+                      latitude)
+  ) %>%
+  ungroup()
 
-# Clean site in trait before joining
-train_trait_clean = train_trait %>%
-  mutate(site = clean_site(site))
+# checks results
+cat("Test rows:", nrow(test_df), "\n")
 
-# Build training dataset: trait + meta + soil
-train_df = train_trait_clean %>%
-  left_join(train_meta_clean,  by = c("year", "site")) %>%
-  left_join(train_soil_clean,  by = c("year", "site"))
-
-# build testing dataset: submission + meta + soil
-test_df = test_sub %>%
-  left_join(test_meta,         by = c("year", "site")) %>%
-  left_join(test_soil_clean,   by = c("year", "site"))
-
-#  Check results 
-cat("Training rows:", nrow(train_df), "\n")
-cat("Testing rows:",  nrow(test_df),  "\n")
-
-cat("\nTraining NAs per column:\n")
-train_df %>%
+na_check <- test_df %>%
   summarise(across(everything(), ~sum(is.na(.)))) %>%
   pivot_longer(everything(), names_to = "column", values_to = "n_NA") %>%
-  filter(n_NA > 0) %>%
-  print()
+  filter(n_NA > 0)
 
-cat("\nTesting NAs per column:\n")
-test_df %>%
-  summarise(across(everything(), ~sum(is.na(.)))) %>%
-  pivot_longer(everything(), names_to = "column", values_to = "n_NA") %>%
-  filter(n_NA > 0) %>%
-  print()
+print(na_check)
 ```
 
 ## Add site_year grouping variable
@@ -159,6 +294,7 @@ train_df = train_df %>%
 test_df = test_df %>%
   mutate(site_year = paste(site, year, sep = "_"))
 ```
+
 
 ## Convert character columns to factors
 ```{r}
@@ -181,6 +317,7 @@ test_df = test_df %>%
     site_year     = factor(site_year)
   )
 ```
+
 
 # Distribution of target variable
 ```{r distribution}
@@ -217,108 +354,129 @@ cat("Number of predictors:", n_pred, "\n")
 ```
 
 ## Pull weather data using nasapower
-```{# {r}
-# #| message: false
-# #| warning: false
-# #| eval: false   
-# 
-# # Get unique site-year-lat-lon from BOTH training and testing meta
-# # We need weather for every site-year we have coordinates for
-# sites_train = train_meta_clean %>%
-#   filter(!is.na(latitude), !is.na(longitude)) %>%
-#   select(year, site, latitude, longitude) %>%
-#   distinct()
-# 
-# sites_test = test_meta %>%
-#   select(year, site, latitude, longitude) %>%
-#   filter(!is.na(latitude), !is.na(longitude)) %>%
-#   distinct()
-# 
-# all_sites = bind_rows(sites_train, sites_test) %>%
-#   distinct(year, site, .keep_all = TRUE)
-# 
-# cat("Total site-years to pull weather for:", nrow(all_sites), "\n")
-# 
-# # Function to pull growing season weather for one site-year
-# # Corn growing season = May (day 121) to October (day 304)
-# pull_weather = function(year, lat, lon, site) {
-#   
-#   tryCatch({
-#     raw = get_power(
-#       community  = "AG",
-#       lonlat     = c(lon, lat),
-#       pars       = c("T2M_MAX",   # daily max temperature (C)
-#                      "T2M_MIN",   # daily min temperature (C)  
-#                      "PRECTOTCORR", # precipitation (mm/day)
-#                      "ALLSKY_SFC_SW_DWN"), # solar radiation (MJ/m2/day)
-#       dates      = c(paste0(year, "-05-01"),   # May 1
-#                      paste0(year, "-10-31")),  # Oct 31
-#       temporal_api = "daily"
-#     )
-#     
-#     raw %>%
-#       mutate(
-#         site = site,
-#         year = year,
-#         # Growing degree days for corn (base 10C, max 30C)
-#         tmax_capped = pmin(T2M_MAX, 30),
-#         tmin_capped = pmax(T2M_MIN, 10),
-#         gdd = pmax((tmax_capped + tmin_capped) / 2 - 10, 0)
-#       ) %>%
-#       group_by(year, site) %>%
-#       summarise(
-#         # Temperature summaries
-#         tmean_season   = mean((T2M_MAX + T2M_MIN) / 2, na.rm = TRUE),
-#         tmax_mean      = mean(T2M_MAX, na.rm = TRUE),
-#         tmin_mean      = mean(T2M_MIN, na.rm = TRUE),
-#         # Heat stress: days where max temp > 35C
-#         heat_stress_days = sum(T2M_MAX > 35, na.rm = TRUE),
-#         # Growing degree days (accumulated)
-#         gdd_total      = sum(gdd, na.rm = TRUE),
-#         # Precipitation
-#         precip_total   = sum(PRECTOTCORR, na.rm = TRUE),
-#         # Solar radiation
-#         srad_mean      = mean(ALLSKY_SFC_SW_DWN, na.rm = TRUE),
-#         .groups = "drop"
-#       )
-#     
-#   }, error = function(e) {
-#     message("Failed for site=", site, " year=", year, ": ", e$message)
-#     return(NULL)
-#   })
-# }
-# 
-# # Pull weather for all site-years
-# cat("Pulling weather data... this takes ~5-10 minutes\n")
-# 
-# weather_list <- vector("list", nrow(all_sites))
-# 
-# for (i in seq_len(nrow(all_sites))) {
-#   cat("Pulling", i, "of", nrow(all_sites), 
-#       "| site:", all_sites$site[i], 
-#       "| year:", all_sites$year[i], "\n")
-#   
-#   weather_list[[i]] <- pull_weather(
-#     year = all_sites$year[i],
-#     lat  = all_sites$latitude[i],
-#     lon  = all_sites$longitude[i],
-#     site = all_sites$site[i]
-#   )
-#   
-#  
-#   Sys.sleep(0.5)
-# }
-# 
-# # Combine all results
-# weather_df <- bind_rows(weather_list)
-# 
-# cat("Weather data pulled successfully!\n")
-# cat("Rows:", nrow(weather_df), "\n")
-# cat("Columns:", ncol(weather_df), "\n")
-# 
-# # Save to file
-# write_csv(weather_df, "../data/weather_season_summary.csv")
-# cat("Saved to ../data/weather_season_summary.csv\n")
+```{r}
+#| message: false
+#| warning: false
+#| eval: false
+
+clean_site_base <- function(x) {
+  x %>%
+    str_to_lower() %>%
+    str_extract("[a-z]{2,3}h?\\d+[a-z]?") %>%   # handles IAH1, TXH4, NYH1A
+    str_to_upper()
+}
+
+# Get unique site-year-lat-lon from BOTH training and testing meta
+# We need weather for every site-year we have coordinates for
+sites_train <- train_df %>%
+  transmute(
+    year,
+    site_base,
+    latitude,
+    longitude
+  ) %>%
+  filter(!is.na(latitude), !is.na(longitude)) %>%
+  distinct()
+
+sites_test <- test_meta %>%
+  clean_names() %>%
+  mutate(site_base = clean_site_base(site)) %>%
+  transmute(
+    year,
+    site_base,
+    latitude,
+    longitude
+  ) %>%
+  filter(!is.na(latitude), !is.na(longitude)) %>%
+  distinct()
+
+all_sites <- bind_rows(sites_train, sites_test) %>%
+  distinct(year, site_base, .keep_all = TRUE)
+
+cat("Total site-years:", nrow(all_sites), "\n")
+
+cat("Total site-years to pull weather for:", nrow(all_sites), "\n")
+
+# Function to pull growing season weather for one site-year
+# Corn growing season = May (day 121) to October (day 304)
+pull_weather = function(year, lat, lon, site) {
+
+  tryCatch({
+    raw = get_power(
+      community  = "AG",
+      lonlat     = c(lon, lat),
+      pars       = c("T2M_MAX",   # daily max temperature (C)
+                     "T2M_MIN",   # daily min temperature (C)
+                     "PRECTOTCORR", # precipitation (mm/day)
+                     "ALLSKY_SFC_SW_DWN"), # solar radiation (MJ/m2/day)
+      dates      = c(paste0(year, "-05-01"),   # May 1
+                     paste0(year, "-10-31")),  # Oct 31
+      temporal_api = "daily"
+    )
+
+    raw %>%
+      mutate(
+        site = site,
+        year = year,
+        # Growing degree days for corn (base 10C, max 30C)
+        tmax_capped = pmin(T2M_MAX, 30),
+        tmin_capped = pmax(T2M_MIN, 10),
+        gdd = pmax((tmax_capped + tmin_capped) / 2 - 10, 0)
+      ) %>%
+      group_by(year, site) %>%
+      summarise(
+        # Temperature summaries
+        tmean_season   = mean((T2M_MAX + T2M_MIN) / 2, na.rm = TRUE),
+        tmax_mean      = mean(T2M_MAX, na.rm = TRUE),
+        tmin_mean      = mean(T2M_MIN, na.rm = TRUE),
+        # Heat stress: days where max temp > 35C
+        heat_stress_days = sum(T2M_MAX > 35, na.rm = TRUE),
+        # Growing degree days (accumulated)
+        gdd_total      = sum(gdd, na.rm = TRUE),
+        # Precipitation
+        precip_total   = sum(PRECTOTCORR, na.rm = TRUE),
+        # Solar radiation
+        srad_mean      = mean(ALLSKY_SFC_SW_DWN, na.rm = TRUE),
+        .groups = "drop"
+      )
+
+  }, error = function(e) {
+    message("Failed for site=", site, " year=", year, ": ", e$message)
+    return(NULL)
+  })
+}
+
+# Pull weather for all site-years
+cat("Pulling weather data... this takes ~5-10 minutes\n")
+
+weather_list <- vector("list", nrow(all_sites))
+
+for (i in seq_len(nrow(all_sites))) {
+  cat("Pulling", i, "of", nrow(all_sites),
+      "| site:", all_sites$site[i],
+      "| year:", all_sites$year[i], "\n")
+
+  weather_list[[i]] <- pull_weather(
+    year = all_sites$year[i],
+    lat  = all_sites$latitude[i],
+    lon  = all_sites$longitude[i],
+    site = all_sites$site[i]
+  )
+
+
+  Sys.sleep(0.5)
+}
+
+# Combine all results
+weather_df <- bind_rows(weather_list)
+
+cat("Weather data pulled successfully!\n")
+cat("Rows:", nrow(weather_df), "\n")
+cat("Columns:", ncol(weather_df), "\n")
+
+# Save to file
+write_csv(weather_df, "../data/weather_season_summary.csv")
+cat("Saved to ../data/weather_season_summary.csv\n")
 ```
 
 
@@ -564,7 +722,6 @@ xgb_tuned %>%
 ```
 
 # Fit on all training data and predict 2024
-
 ```{r}
 final_xgb_fit = fit(final_xgb_wf, data = train_df)
 
@@ -659,7 +816,6 @@ glmnet_rec
 ```
 
 ## GLMNet workflow
-
 ```{r}
 #| message: false
 #| warning: false
@@ -672,7 +828,6 @@ glmnet_wf
 ```
 
 ## GLMNet tuning grid
-
 ```{r}
 #| message: false
 #| warning: false
@@ -691,7 +846,6 @@ glmnet_grid
 ```
 
 ## Tune GLMNet with grouped CV
-
 ```{r}
 set.seed(488)
 
@@ -733,7 +887,6 @@ collect_metrics(glmnet_tuned) %>%
 ```
 
 ## Select best GLMNet model
-
 ```{r}
 #| message: false
 #| warning: false
@@ -750,7 +903,6 @@ final_glmnet_wf
 ```
 
 ## GLMNet predicted vs observed plot
-
 ```{r}
 #| message: false
 #| warning: false
@@ -772,7 +924,6 @@ glmnet_tuned %>%
 ```
 
 ## GLMNet performance metrics
-
 ```{r}
 #| message: false
 #| warning: false
@@ -817,6 +968,9 @@ test_sub %>%
 cat("GLMNet predictions saved!\n")
 ```
 
+
 ```{r}
 knitr::purl("Final_Project_Group_10.qmd", output = "final_project_group_10_sapelo_script.R", documentation = 0)
 ```
+
+

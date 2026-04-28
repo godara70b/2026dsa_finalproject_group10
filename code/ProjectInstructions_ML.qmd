@@ -139,5 +139,4 @@ If you are working in duos, make sure to split the workload. I will check your c
 # L. Extra  
 Once each team submits their predictions on my test set, I will compare their predictions with the observed values (that you don't have).  
 
-The team that gets the highest **R2** or lowest **RMSE** will receive an award and bragging rights.  
-
+The team that gets the highest **R2** or lowest **RMSE** will receive an award and bragging rights.

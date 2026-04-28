@@ -6,274 +6,375 @@ author1: Taiwo Owolanke
 author2: Amit Godara
 ---
 
-```{r} # shared_lib_path <- "/work/crss8030/instructor_data/shared_R_libs"  #class_packages <- c("tidymodels", "tidyverse", "vip", "ranger", "finetune", "parsnip", "reticulate", "xgboost", "doParallel", "lme4", "here")  #install.packages(class_packages, lib = shared_lib_path)}
+# Libraries to be used in cluster - sapelo2
+
+```{r}
+# packages <- c(
+#   # core modeling
+#   "tidymodels",
+#   "finetune",
+#   
+#   # data wrangling
+#   "tidyverse",
+#   "janitor",
+#   "stringr",
+#   "lubridate",
+#   
+#   # models
+#   "ranger",
+#   "glmnet",
+#   "xgboost",
+#   
+#   # utilities
+#   "vip",
+#   "nasapower",
+#   "here",
+#   
+#   # parallel
+#   "doParallel",
+#   
+#   "lme4",
+#   
+#   "future",
+#   
+#   "embed",
+#   
+#   "recipes"
+# )
+
 ```
 
-# Locate the installed libraries (important step while running the script in cluster - sapelo2)
+# Locate the installed libraries while running the script in cluster - sapelo2
 
-```{r} # .libPaths(c("/work/crss8030/instructor_data/shared_R_libs", .libPaths()))}
+```{r}
+# shared_lib_path <- "/work/crss8030/instructor_data/shared_R_libs"
+
+# packages <- c("tidymodels", "tidyverse", "vip", "ranger", "finetune", "parsnip", "reticulate", "xgboost", "doParallel", "lme4", "here")
+# 
+# install.packages(packages, lib = shared_lib_path)
+
+# .libPaths(c(shared_lib_path, .libPaths()))
+
+
+# shared_lib_path <- "/home/tao92719/shared_R_libs"
+# .libPaths(shared_lib_path)
+# # confirm
+# .libPaths()
+
+# # install missing packages
+# installed <- installed.packages(lib.loc = shared_lib_path)[, "Package"]
+# to_install <- packages[!packages %in% installed]
+# if (length(to_install)) install.packages(to_install, lib = shared_lib_path, dependencies = T, repos = "https://cloud.r-project.org")
+
+# install once if needed
+# options(repos = c(CRAN = "https://cloud.r-project.org"))
+# install.packages("xgboost", lib = shared_lib_path)
+
+
+# unlink("/home/tao92719/shared_R_libs/00LOCK-xgboost", recursive = TRUE, force = TRUE)
+# install.packages("xgboost", lib = "/home/tao92719/shared_R_libs", repos = "https://cloud.r-project.org")
 ```
 
-# Load packages/Libraries
+# Load packages
 
 ```{r}
 #| message: false
 #| warning: false
 
+# Core modeling framework
 library(tidymodels)
-library(tidyverse)    # Data wrangling and visualization
-library(finetune)     # Additional tuning strategies (e.g racing, ANOVA-based tuning)
-library(recipes)  # step_rm to work
-library(lubridate)
-library(ranger)       # Fast implementation of Random Forests
-library(rsample)
-library(nasapower)
-library(glmnet)
-library(vip)          # For plotting variable importance from fitted models
-library(xgboost)      # XGBoost implementation in R
-library(doParallel)   # For parallel computing (useful during resampling/tuning)
-library(dplyr)
+tidymodels_prefer()
+library(finetune)
 
-library(here)         # Gives the absolute path starting from Rproj, works well with different scripts (R, .rmd or .qmd)
-library(quarto)       # helps to export the qmd script to R script
-#library(caret)       # Other great library for Machine Learning
+# Data wrangling
+library(tidyverse)
 library(janitor)
 library(stringr)
-library(tidyr)
+library(lubridate)
+
+# Modeling engines
+library(ranger)
+library(glmnet)
+
+library(xgboost)
+
+# Utilities
+library(vip)
+library(nasapower)
+library(purrr)
+library(janitor)
+library(here)
+
+# Parallel processing
+# library(doParallel)
+library(future)  # for parallel
+
+#install.packages("embed", lib = shared_lib_path)
+library(embed)
+library(recipes)
+
+#library(lme4)
+
+
+theme_set(theme_bw())
 
 here::here()
 ```
 
-## **Loading and inspecting the training and testing data files**
+## **Inspecting the training and testing data files**
+
 ```{r}
 #| message: false
 #| warning: false
 
-# list.files("../data/training", full.names = TRUE)
-# list.files("../data/testing", full.names = TRUE)
+list.files("../data/training", full.names = TRUE)
+list.files("../data/testing", full.names = TRUE)
 
-```
-
-## **Read all CSV files**
-```{r}
-#| message: false
-#| warning: false
-
-train_meta  = read_csv(here("data/training", "training_meta.csv"))
-train_soil  = read_csv(here("data/training", "training_soil.csv"))
-train_trait = read_csv(here("data/training", "training_trait.csv"))
-
-test_meta   = read_csv(here("data/testing", "testing_meta.csv"))
-test_soil   = read_csv(here("data/testing", "testing_soil.csv"))
-test_sub    = read_csv(here("data/testing", "testing_submission.csv"))
-```
-
-## **Pre-processing**
-## Clean site names and join all files
-```{r}
-#| message: false
-#| warning: false
-
-# site extraction functions
+# helper functions
 extract_site_base <- function(x) {
   x %>%
-    str_to_lower() %>%
-    str_extract("^[a-z]{2,3}h\\d+") %>%
-    str_to_upper()
+    stringr::str_to_lower() %>%
+    stringr::str_extract("[a-z]{2,3}h?\\d+[a-z]?") %>%
+    stringr::str_to_upper()
 }
 
-make_site_year <- function(year, site_base) {
-  paste(year, site_base, sep = "_")
+safe_mean <- function(x) {
+  if (all(is.na(x))) NA_real_ else mean(x, na.rm = TRUE)
 }
 
-# clean training trait data
-train_trait_clean <- train_trait %>%
-  clean_names() %>%
-  mutate(
-    site_base = extract_site_base(site),
-    site_year = make_site_year(year, site_base),
-
-    treatment = case_when(
-      str_detect(str_to_lower(site), "dry")   ~ "dry",
-      str_detect(str_to_lower(site), "early") ~ "early",
-      str_detect(str_to_lower(site), "late")  ~ "late",
-      TRUE ~ "normal"
-    ),
-
-    date_harvested = mdy(date_harvested)
-  ) %>%
-  filter(!is.na(site_base))   # drop malformed site names early
-
-# clean training meta data at site level only
-train_meta_clean <- train_meta %>%
-  clean_names() %>%
-  mutate(site_base = extract_site_base(site)) %>%
-  filter(!is.na(site_base)) %>%
-  group_by(site_base) %>%
-  summarise(
-    previous_crop = first(na.omit(previous_crop)),
-    longitude     = mean(longitude, na.rm = TRUE),
-    latitude      = mean(latitude, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-# clean training soil data at site level only
-train_soil_clean <- train_soil %>%
-  clean_names() %>%
-  mutate(site_base = extract_site_base(site)) %>%
-  filter(!is.na(site_base)) %>%
-  group_by(site_base) %>%
-  summarise(
-    soilpH    = mean(soilp_h, na.rm = TRUE),
-    om_pct    = mean(om_pct, na.rm = TRUE),
-    soilk_ppm = mean(soilk_ppm, na.rm = TRUE),
-    soilp_ppm = mean(soilp_ppm, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-# identify valid sites
-valid_sites <- train_trait_clean %>%
-  distinct(site_base) %>%
-  inner_join(train_meta_clean, by = "site_base") %>%
-  inner_join(train_soil_clean, by = "site_base")
-
-# join training traits, meta and soil cleaned data
-train_df <- train_trait_clean %>%
-  semi_join(valid_sites, by = "site_base") %>%  # keep only valid sites
-  left_join(train_meta_clean, by = "site_base") %>%
-  left_join(train_soil_clean, by = "site_base")
-
-# debug missing sites
-missing_sites = train_trait_clean %>%
-  distinct(site_base) %>%
-  anti_join(train_meta_clean, by = "site_base")
-
-print(missing_sites)
-
-soil_vars <- c("soilpH", "om_pct", "soilk_ppm", "soilp_ppm")
-
-# global medians as named vector
-global_medians <- train_df %>%
-  summarise(across(all_of(soil_vars), ~ median(.x, na.rm = TRUE))) %>%
-  unlist()
-
-train_df <- train_df %>%
-  group_by(site_base) %>%
-  mutate(across(
-    all_of(soil_vars),
-    ~ ifelse(
-        is.na(.x),
-        ifelse(
-          all(is.na(.x)),
-          global_medians[[cur_column()]],   # fallback to global
-          median(.x, na.rm = TRUE)         # site-level median
-        ),
-        .x
-      )
-  )) %>%
-  ungroup()
-
-train_df <- train_df %>%
-  mutate(previous_crop = replace_na(previous_crop, "unknown"))
-
-# drop data having missing harvest dates
-train_df <- train_df %>%
-  filter(!is.na(date_harvested))
-
-# drop missing sites not in train data and train meta data
-train_df <- train_df %>%
-  filter(!site_base %in% missing_sites)
-
-na_check <- train_df %>%
-  summarise(across(everything(), ~ sum(is.na(.)))) %>%
-  pivot_longer(everything(), names_to = "column", values_to = "n_NA") %>%
-  filter(n_NA > 0)
-
-print(na_check)
-
-cat("Training rows:", nrow(train_df), "\n")
-glimpse(train_df)
 ```
 
+## **read all CSV files**
 
 ```{r}
 #| message: false
 #| warning: false
 
-# site cleaner and extraction function to match train data
-extract_site_base <- function(s) {
-  s %>%
-    str_to_lower() %>%
-    str_extract("^[a-z]{2,3}h\\d+") %>%
-    str_to_upper()
+# read and clean raw data
+train_meta  <- read_csv(here("data/training", "training_meta.csv"),  show_col_types = FALSE) %>%
+  clean_names()
+train_soil  <- read_csv(here("data/training", "training_soil.csv"),  show_col_types = FALSE) %>%
+  clean_names()
+train_trait <- read_csv(here("data/training", "training_trait.csv"), show_col_types = FALSE) %>%
+  clean_names()
+
+test_meta   <- read_csv(here("data/testing", "testing_meta.csv"), show_col_types = FALSE) %>%
+  clean_names()
+test_soil   <- read_csv(here("data/testing", "testing_soil.csv"), show_col_types = FALSE) %>%
+  clean_names()
+test_sub    <- read_csv(here("data/testing", "testing_submission.csv"), show_col_types = FALSE) %>%
+  clean_names()
+
+```
+
+## **Pre-processing of data**
+
+## Pull weather data using nasapower
+
+```{r}
+meta <- bind_rows(
+  train_meta,
+  test_meta
+) %>%
+  mutate(
+    site_clean = str_squish(site),
+    site_clean = str_remove(site_clean, "\\s*-\\s*rep\\s*\\d+$"),
+    site_clean = str_remove(site_clean, "\\s+(dry|wet|early|earlt|late|rep\\s*\\d+)$"),
+    site_clean = str_trim(site_clean)
+  )
+
+meta_clean <- meta %>%
+  mutate(
+    site_clean = str_trim(str_split_fixed(site, "-", 2)[,1]),
+    treatment  = str_trim(str_split_fixed(site, "-", 2)[,2])
+  )
+
+sites <- meta_clean %>%
+  select(site_clean, year, longitude, latitude, previous_crop) %>%
+  distinct() %>%
+  arrange(site_clean, year)
+
+pull_weather <- function(year, lat, lon, site) {
+  tryCatch({
+    raw <- get_power(
+      community = "AG",
+      lonlat = c(lon, lat),
+      pars = c("T2M_MAX", "T2M_MIN", "PRECTOTCORR", "ALLSKY_SFC_SW_DWN"),
+      dates = c(paste0(year, "-05-01"), paste0(year, "-10-31")),
+      temporal_api = "daily"
+    )
+
+    raw %>%
+      mutate(
+        site_clean = site,
+        year = year,
+        longitude = lon,
+        latitude = lat,
+        tmax_capped = pmin(T2M_MAX, 30),
+        tmin_capped = pmax(T2M_MIN, 10),
+        gdd = pmax((tmax_capped + tmin_capped) / 2 - 10, 0)
+      ) %>%
+      summarise(
+        site_clean = first(site_clean),
+        year = first(year),
+        longitude = first(longitude),
+        latitude = first(latitude),
+        tmean_season = mean((T2M_MAX + T2M_MIN) / 2, na.rm = TRUE),
+        tmax_mean    = mean(T2M_MAX, na.rm = TRUE),
+        tmin_mean    = mean(T2M_MIN, na.rm = TRUE),
+        heat_days    = sum(T2M_MAX > 35, na.rm = TRUE),
+        gdd_total    = sum(gdd, na.rm = TRUE),
+        precip_total = sum(PRECTOTCORR, na.rm = TRUE),
+        srad_mean    = mean(ALLSKY_SFC_SW_DWN, na.rm = TRUE)
+      )
+  }, error = function(e) {
+    message("FAILED: ", site_clean, " ", year, " | ", e$message)
+    return(NULL)
+  })
 }
 
-# clean test soil data
-test_soil_clean <- test_soil %>%
-  clean_names() %>%
-  mutate(site_base = extract_site_base(site)) %>%
-  group_by(year, site_base) %>%
-  summarise(
-    soilpH    = mean(soilp_h, na.rm = TRUE),
-    om_pct    = mean(om_pct, na.rm = TRUE),
-    soilk_ppm = mean(soilk_ppm, na.rm = TRUE),
-    soilp_ppm = mean(soilp_ppm, na.rm = TRUE),
-    .groups = "drop"
-  )
+# match sites column order to function parameters
+weather_list <- pmap(
+  sites %>% select(year, latitude, longitude, site_clean, previous_crop),
+  function(year, latitude, longitude, site_clean, previous_crop) {
+    pull_weather(year, latitude, longitude, site_clean)
+  }
+)
 
-# clean test meta
-test_meta_clean <- test_meta %>%
-  clean_names() %>%
-  mutate(
-    previous_crop = str_to_lower(previous_crop),
-    site_base = extract_site_base(site)
+weather_all <- bind_rows(weather_list) %>%
+  left_join(
+    sites %>% select(site_clean, year, previous_crop),
+    by = c("site_clean", "year")
   ) %>%
-  group_by(year, site_base) %>%
+  select(site_clean, year, longitude, latitude, previous_crop,
+         tmean_season, tmax_mean, tmin_mean, heat_days, gdd_total,
+         precip_total, srad_mean)
+
+# save weather data to file
+file_path <- here(
+  "data",
+  paste0("weather_season_summary_", Sys.Date(), ".csv")
+)
+
+readr::write_csv(weather_all, file_path)
+```
+
+## Load weather data and combine with training data
+```{r}
+#| message: false
+#| warning: false
+
+# load the saved weather file
+files <- list.files(
+  here("data"),
+  pattern = "weather_season_summary_.*\\.csv$",
+  full.names = TRUE
+)
+
+if (length(files) == 0) {
+  stop("No weather_season_summary_*.csv file found in data/.")
+}
+
+latest_file <- files[which.max(file.info(files)$mtime)]
+weather_all <- read_csv(latest_file, show_col_types = FALSE)
+
+weather2 <- weather_all %>%
+  mutate(site_clean = str_trim(site_clean)) %>%
+  distinct(site_clean, year, .keep_all = TRUE)
+
+# combine train trait + weather + soil data
+train_trait2 <- train_trait %>%
+  mutate(site_clean = str_extract(site, "^[A-Z0-9]+"))
+
+train_joined <- train_trait2 %>%
+  left_join(weather2, by = c("site_clean", "year"))
+
+train_final <- train_joined %>%
+  filter(!is.na(gdd_total))
+
+train_soil2 <- train_soil %>%
+  mutate(
+    site_clean = str_remove(site, "_\\d{4}$"),
+    year       = as.integer(str_extract(site, "\\d{4}$"))
+  ) %>%
+  group_by(site_clean, year) %>%
   summarise(
-    previous_crop = first(previous_crop),
-    longitude = mean(longitude, na.rm = TRUE),
-    latitude  = mean(latitude,  na.rm = TRUE),
-    .groups = "drop"
-  )
+    soilpH    = safe_mean(soilp_h),
+    om_pct    = safe_mean(om_pct),
+    soilk_ppm = safe_mean(soilk_ppm),
+    soilp_ppm = safe_mean(soilp_ppm),
+    .groups   = "drop"
+  ) %>%
+  # select(-site) %>%
+  distinct(site_clean, year, .keep_all = TRUE)
 
-# clean test submission data
+
+train_df <- train_final %>%
+  left_join(train_soil2, by = c("site_clean", "year"))
+
+glimpse(train_df)
+cat("Training rows:", nrow(train_df), " | columns:", ncol(train_df), "\n")
+
+
+# check weather NAs
+cat("\nWeather NAs in training:\n")
+train_df %>%
+  select(tmean_season, tmax_mean, tmin_mean, 
+         heat_days, gdd_total, precip_total, srad_mean) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "n_NA") %>%
+  print()
+
+```
+
+## Clean test and combine data - submission + meta + soil + weather
+```{r}
+#| message: false
+#| warning: false
+
 test_sub_clean <- test_sub %>%
-  clean_names() %>%
   mutate(
-    site_base = extract_site_base(site)
+    site_clean = extract_site_base(site),
+    year       = 2024
   )
 
-# build test data set
-test_df <- test_sub_clean %>%
-  
-  # join meta and soil
-  left_join(test_meta_clean, by = c("year", "site_base")) %>%
-  left_join(test_soil_clean, by = c("year", "site_base")) %>%
-  
-  # handle missing value
+test_meta_clean <- test_meta %>%
   mutate(
+    site_clean    = extract_site_base(site),
+    previous_crop = str_to_lower(previous_crop)
+  ) %>%
+  distinct(site_clean, year, .keep_all = TRUE)
+
+test_soil_clean <- test_soil %>%
+  mutate(site_clean = extract_site_base(site)) %>%
+  group_by(site_clean, year) %>%
+  summarise(
+    soilpH    = safe_mean(soilp_h),
+    om_pct    = safe_mean(om_pct),
+    soilk_ppm = safe_mean(soilk_ppm),
+    soilp_ppm = safe_mean(soilp_ppm),
+    .groups   = "drop"
+  )
+
+# combine  submission + meta + soil + weather
+test_df <- test_sub_clean %>%
+  left_join(test_meta_clean, by = c("site_clean", "year")) %>%
+  left_join(test_soil_clean, by = c("site_clean", "year")) %>%
+  left_join(weather2,        by = c("site_clean", "year")) %>%
+  mutate(
+    previous_crop = coalesce(previous_crop.x, previous_crop.y),
+    longitude     = coalesce(longitude.x, longitude.y),
+    latitude      = coalesce(latitude.x, latitude.y),
     previous_crop = replace_na(previous_crop, "unknown"),
-    
     across(
       c(soilpH, om_pct, soilk_ppm, soilp_ppm),
-      ~ replace_na(., mean(., na.rm = TRUE))
+      ~ ifelse(is.na(.), safe_mean(.), .)
     )
   ) %>%
-  
-  # fill lat/long within site
-  group_by(site_base) %>%
-  mutate(
-    longitude = ifelse(is.na(longitude),
-                       mean(longitude, na.rm = TRUE),
-                       longitude),
-    latitude = ifelse(is.na(latitude),
-                      mean(latitude, na.rm = TRUE),
-                      latitude)
-  ) %>%
-  ungroup()
+  select(-ends_with(".x"), -ends_with(".y"), -site.x, -site.y)
 
-# checks results
 cat("Test rows:", nrow(test_df), "\n")
+
 
 na_check <- test_df %>%
   summarise(across(everything(), ~sum(is.na(.)))) %>%
@@ -283,342 +384,140 @@ na_check <- test_df %>%
 print(na_check)
 ```
 
-## Add site_year grouping variable
+## convert character columns to factors
 ```{r}
 #| message: false
 #| warning: false
+# convert character columns to factors
+train_df <- train_df %>%
+  mutate(
+    site          = factor(site_clean),
+    hybrid        = factor(hybrid),
+    previous_crop = factor(previous_crop),
+    year          = factor(year),
+    site_year     = paste(site_clean, year, sep = "_")
+  )
 
-train_df = train_df %>%
-  mutate(site_year = paste(site, year, sep = "_"))
+test_df <- test_df %>%
+  mutate(
+    site          = factor(site_clean),
+    hybrid        = factor(hybrid),
+    previous_crop = factor(previous_crop),
+    year          = factor(year),
+    site_year     = paste(site_clean, year, sep = "_")
+  )
 
-test_df = test_df %>%
-  mutate(site_year = paste(site, year, sep = "_"))
 ```
 
 
-## Convert character columns to factors
-```{r}
-#| message: false
-#| warning: false
-
-train_df = train_df %>%
-  mutate(
-    site          = factor(site),
-    hybrid        = factor(hybrid),
-    previous_crop = factor(previous_crop),
-    site_year     = factor(site_year)
-  )
-
-test_df = test_df %>%
-  mutate(
-    site          = factor(site),
-    hybrid        = factor(hybrid),
-    previous_crop = factor(previous_crop),
-    site_year     = factor(site_year)
-  )
-```
-
-
-# Distribution of target variable
+# Yield distribution
 ```{r distribution}
 #| message: false
 #| warning: false
 
-density_plot <- ggplot() +
-  geom_density(data = train_df, 
-               aes(x = yield_mg_ha),
-               color = "red") +
-  # geom_density(data = test_df, 
-  #              aes(x = yield_mg_ha),
-  #              color = "blue") 
-# test data has X variable as NA's, so omitted
-  
-# lets print the undergoing process in the console, (important when running in the terminal later on)
-cat(paste0("Saving...... density plot of train data"))
+# yield distribution
+density_plot <- ggplot(train_df, aes(x = yield_mg_ha)) +
+  geom_density(fill = "steelblue", color = "white", alpha = 0.6) +
+  labs(
+    title = "Distribution of Training Yields",
+    x = "Yield (Mg/ha)", 
+    y = "Density"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.minor = element_blank())
 
+# print status
+cat("Saving...... density plot of train data\n")
+
+# save plot
 ggsave(plot = density_plot, 
        path = here("output", "png"),
        filename = "density_plot_train.png",
        height = 6,
        width = 9,
        dpi = 600)
+
 ```
 
-## Count predictors (needed for mtry in XGBoost grid)
-```{r}
-n_pred = train_df %>%
-  select(-yield_mg_ha, -site_year) %>%
-  ncol()
+# Recipe using yield_mg_ha as the outcome for both XGBoost and GLMNET models
 
-cat("Number of predictors:", n_pred, "\n")
-```
-
-## Pull weather data using nasapower
-```{r}
-#| message: false
-#| warning: false
-#| eval: false
-
-clean_site_base <- function(x) {
-  x %>%
-    str_to_lower() %>%
-    str_extract("[a-z]{2,3}h?\\d+[a-z]?") %>%   # handles IAH1, TXH4, NYH1A
-    str_to_upper()
-}
-
-# Get unique site-year-lat-lon from BOTH training and testing meta
-# We need weather for every site-year we have coordinates for
-sites_train <- train_df %>%
-  transmute(
-    year,
-    site_base,
-    latitude,
-    longitude
-  ) %>%
-  filter(!is.na(latitude), !is.na(longitude)) %>%
-  distinct()
-
-sites_test <- test_meta %>%
-  clean_names() %>%
-  mutate(site_base = clean_site_base(site)) %>%
-  transmute(
-    year,
-    site_base,
-    latitude,
-    longitude
-  ) %>%
-  filter(!is.na(latitude), !is.na(longitude)) %>%
-  distinct()
-
-all_sites <- bind_rows(sites_train, sites_test) %>%
-  distinct(year, site_base, .keep_all = TRUE)
-
-cat("Total site-years:", nrow(all_sites), "\n")
-
-cat("Total site-years to pull weather for:", nrow(all_sites), "\n")
-
-# Function to pull growing season weather for one site-year
-# Corn growing season = May (day 121) to October (day 304)
-pull_weather = function(year, lat, lon, site) {
-
-  tryCatch({
-    raw = get_power(
-      community  = "AG",
-      lonlat     = c(lon, lat),
-      pars       = c("T2M_MAX",   # daily max temperature (C)
-                     "T2M_MIN",   # daily min temperature (C)
-                     "PRECTOTCORR", # precipitation (mm/day)
-                     "ALLSKY_SFC_SW_DWN"), # solar radiation (MJ/m2/day)
-      dates      = c(paste0(year, "-05-01"),   # May 1
-                     paste0(year, "-10-31")),  # Oct 31
-      temporal_api = "daily"
-    )
-
-    raw %>%
-      mutate(
-        site = site,
-        year = year,
-        # Growing degree days for corn (base 10C, max 30C)
-        tmax_capped = pmin(T2M_MAX, 30),
-        tmin_capped = pmax(T2M_MIN, 10),
-        gdd = pmax((tmax_capped + tmin_capped) / 2 - 10, 0)
-      ) %>%
-      group_by(year, site) %>%
-      summarise(
-        # Temperature summaries
-        tmean_season   = mean((T2M_MAX + T2M_MIN) / 2, na.rm = TRUE),
-        tmax_mean      = mean(T2M_MAX, na.rm = TRUE),
-        tmin_mean      = mean(T2M_MIN, na.rm = TRUE),
-        # Heat stress: days where max temp > 35C
-        heat_stress_days = sum(T2M_MAX > 35, na.rm = TRUE),
-        # Growing degree days (accumulated)
-        gdd_total      = sum(gdd, na.rm = TRUE),
-        # Precipitation
-        precip_total   = sum(PRECTOTCORR, na.rm = TRUE),
-        # Solar radiation
-        srad_mean      = mean(ALLSKY_SFC_SW_DWN, na.rm = TRUE),
-        .groups = "drop"
-      )
-
-  }, error = function(e) {
-    message("Failed for site=", site, " year=", year, ": ", e$message)
-    return(NULL)
-  })
-}
-
-# Pull weather for all site-years
-cat("Pulling weather data... this takes ~5-10 minutes\n")
-
-weather_list <- vector("list", nrow(all_sites))
-
-for (i in seq_len(nrow(all_sites))) {
-  cat("Pulling", i, "of", nrow(all_sites),
-      "| site:", all_sites$site[i],
-      "| year:", all_sites$year[i], "\n")
-
-  weather_list[[i]] <- pull_weather(
-    year = all_sites$year[i],
-    lat  = all_sites$latitude[i],
-    lon  = all_sites$longitude[i],
-    site = all_sites$site[i]
-  )
-
-
-  Sys.sleep(0.5)
-}
-
-# Combine all results
-weather_df <- bind_rows(weather_list)
-
-cat("Weather data pulled successfully!\n")
-cat("Rows:", nrow(weather_df), "\n")
-cat("Columns:", ncol(weather_df), "\n")
-
-# Save to file
-write_csv(weather_df, "../data/weather_season_summary.csv")
-cat("Saved to ../data/weather_season_summary.csv\n")
-```
-
-
-## Load weather data and combine with training and testing data
-```{r}
-#| message: false
-#| warning: false
-
-# Load the saved weather file
-weather_df = read_csv(here("data", "weather_season_summary.csv"))
-
-# Join weather to training data
-train_df = train_df %>%
-  left_join(weather_df, by = c("year", "site"))
-
-# Join weather to testing data
-test_df = test_df %>%
-  left_join(weather_df, by = c("year", "site"))
-
-cat("Training columns after weather join:", ncol(train_df), "\n")
-cat("Testing columns after weather join:", ncol(test_df), "\n")
-
-# Check weather NAs
-cat("\nWeather NAs in training:\n")
-train_df %>%
-  select(tmean_season, tmax_mean, tmin_mean, 
-         heat_stress_days, gdd_total, precip_total, srad_mean) %>%
-  summarise(across(everything(), ~sum(is.na(.)))) %>%
-  pivot_longer(everything(), names_to = "column", values_to = "n_NA") %>%
-  print()
-
-# Update n_pred after adding weather columns
-n_pred = train_df %>%
-  select(-yield_mg_ha, -site_year) %>%
-  ncol()
-
-cat("\nUpdated number of predictors:", n_pred, "\n")
-```
-
-# Define a recipe using yield_mg_ha as the outcome
 ```{r}
 #| message: false
 #| warning: false
 
 cat("\nCreate recipe for data preprocessing\n")
 
-corn_rec = recipe(
-  yield_mg_ha ~ year + site + replicate + block + hybrid + date_planted + 
-    date_harvested + grain_moisture + previous_crop + longitude + latitude + soilpH + 
-    om_pct + soilk_ppm + soilp_ppm + tmean_season + tmax_mean + tmin_mean + 
-    heat_stress_days + gdd_total + precip_total + srad_mean,
-  data = train_df
-) %>%
-  # Convert character predictors to factors
-  step_string2factor(all_nominal_predictors()) %>%
-  
-  # Date variables from the character date columns
-  step_mutate(
-    planted_date   = mdy(date_planted),
-    harvested_date = mdy(date_harvested)
-  ) %>%
-  
-  # Engineer numeric date features
-  step_mutate(
-    doy_planted      = yday(planted_date),
-    doy_harvested    = yday(harvested_date),
-    harvest_interval = as.numeric(harvested_date - planted_date)
-  ) %>%
-  
-  # Remove original string and intermediate Date columns
-  step_rm(date_planted, date_harvested, planted_date, harvested_date) %>%
-  
-  # Impute missing numeric and categorical data
-  step_impute_median(all_numeric_predictors()) %>%   # numeric median imputation[web:37][web:43]
-  step_impute_mode(all_nominal_predictors()) %>%     # mode imputation for factors[web:40]
-  
-  # Dummy categorical predictors encoded
-  step_dummy(all_nominal_predictors())
+predictors <- c("year", "site_clean", "previous_crop", "longitude", "latitude", 
+                "soilpH", "om_pct", "soilk_ppm", "soilp_ppm", "tmean_season", 
+                "tmax_mean", "tmin_mean", "heat_days", "gdd_total", 
+                "precip_total", "srad_mean", "hybrid")
 
-corn_rec
+corn_rec <- recipe(as.formula(paste("yield_mg_ha ~", paste(predictors, collapse = " + "))), data = train_df) %>%
+  step_rm(soilpH, om_pct, soilk_ppm, soilp_ppm) %>% # Drop columns that are 100% NA
+  step_novel(all_nominal_predictors()) %>%
+  step_unknown(all_nominal_predictors()) %>%
+  step_lencode_glm(all_nominal_predictors(), outcome = vars(yield_mg_ha)) %>%
+  step_impute_median(all_numeric_predictors()) %>% # Impute remaining NA in other numeric columns
+  step_dummy(all_nominal_predictors(), -hybrid)
+
+
 ```
+
+# Prep the recipe to estimate required statistics
 
 ```{r corn_prep}
-# Prep the recipe to estimate any required statistics
-corn_prep <- corn_rec %>% 
-  prep()
+# corn_prep <- corn_rec %>% 
+#   prep()
+# 
+# # examine preprocessing steps
+# corn_prep
 
-# Examine preprocessing steps
-corn_prep
+# p <- juice(corn_prep) %>%
+#   select(-yield_mg_ha) %>%
+#   ncol()
+# 
+# cat("Number of post-recipe predictors:", p, "\n")
 ```
 
-## **Create grouped resampling**
+# First model - XGBoost
+```{r}
+#| message: false
+#| warning: false
+
+# XGBoost model spec with tunable hyperparameters and workflow
+xgb_spec <- boost_tree(
+  trees          = tune(),  # total number of boosting iterations
+  tree_depth     = tune(),  # maximum depth of each tree
+  learn_rate     = tune(),  # learning rate - step size shrinkage
+  loss_reduction = tune(),
+  min_n          = tune(),  # minimum samples required to split a node
+  mtry           = tune()
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+# XGBoost workflow
+xgb_wf <- workflow() %>%
+  add_model(xgb_spec) %>%
+  add_recipe(corn_rec)
+```
+
+## **Cross-validation setup -** Resampling
+
 ```{r}
 #| message: false
 #| warning: false
 
 set.seed(123)
 
-cv_folds = group_vfold_cv(
-  train_df,
-  group = site_year,
-  v = 5
-)
-cv_folds
+#  Create 5-fold cross-validation resampling object from training data
+resampling_foldcv <- vfold_cv(train_df, v = 3)
 
-```
-
-# Model 1: **XGBoost** 
-```{r}
-#| message: false
-#| warning: false
-
-# XGBoost spec with tunable hyperparameters
-xgb_spec = boost_tree(
-  # Total number of boosting iterations
-  trees          = 1000,
-  # Maximum depth of each tree
-  tree_depth     = tune(),
-  # Step size shrinkage for each boosting step
-  learn_rate     = tune(),
-  loss_reduction = tune(),
-  # Minimum samples required to split a node
-  min_n          = tune(),
-  sample_size    = tune(),
-  mtry           = tune()
-) %>%
-  set_mode("regression") %>%
-  set_engine("xgboost")
-
-xgb_spec
-```
-
-# XGBoost workflow
-```{r}
-#| message: false
-#| warning: false
-
-xgb_wf = workflow() %>%
-  add_model(xgb_spec) %>%
-  add_recipe(corn_rec)
-
-xgb_wf
+# # Create leave one year out cv object from the sampling data
+# resampling_fold_loyo = group_vfold_cv(train_df, group = year)
+# 
+# # Create leave one location out cv object from the sampling data
+# resampling_fold_loso = group_vfold_cv(train_df, group = site)
 ```
 
 ## **Tuning** XGBoost **grid**
@@ -627,350 +526,498 @@ xgb_wf
 #| message: false
 #| warning: false
 
+# Tuning XGBoost grid
 set.seed(123)
 
-# Use Latin space‑filling over a range in the tuning
-xgb_grid = grid_space_filling(
+xgb_grid <- grid_space_filling(
   tree_depth(),
   learn_rate(range = c(-3, -0.5)),
-  trees(),
+  trees(range = c(200L, 500L)),
   loss_reduction(),
   min_n(),
-  sample_size = sample_prop(),
-  mtry(range = c(5, min(50, n_pred))),  # use the n_pred counted from train_df
-  size = 30
+  mtry(range = c(1L, 15L)),
+  size = 2
 )
 
 xgb_grid
 ```
 
-
 ## Hyperparameter grid visualization
-```{r}
-# explore how different tuning settings relate to each other
 
-ggplot(data = xgb_grid,
-       aes(x = tree_depth, 
-           y = min_n)) +
-  geom_point(aes(color = factor(learn_rate),
-                 size = trees),
-             alpha = .5,
-             show.legend = FALSE)
+```{r}
+# plot to explore how different tuning settings relate to each other
+xgb_grid_plot <- ggplot(xgb_grid, aes(x = tree_depth, y = min_n)) +
+  geom_point(
+    aes(color = round(learn_rate, 3), size = trees),
+    alpha = 0.6, show.legend = TRUE # Set to TRUE to see what the values mean
+  ) +
+  labs(
+    title = "XGBoost Hyperparameter Tuning Grid",
+    subtitle = "Tree depth vs. min_n (colored by learning rate, sized by number of trees)",
+    x = "Tree Depth",
+    y = "Min N"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.minor = element_blank())
+
+# show plot
+xgb_grid_plot
+
+# save plot
+cat("Saving...... XGBoost tuning grid visualization\n")
+
+ggsave(plot = xgb_grid_plot, 
+       path = here("output", "png"),
+       filename = "xgb_tuning_grid.png",
+       height = 6,
+       width = 9,
+       dpi = 600)
 ```
 
-
 # Detecting total cores
+
 ```{r}
-# This help us to detect the total number of available cores and then do a parallel processing on each of them
-# Detect Cores for Slurm (Cluster - Sapelo2)
+library(doParallel)
 
-# lets look into our current environment to see the available cores
-n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_ON_NODE"))
+# detect cores and register parallel backend
+n_cores <- parallel::detectCores()
 
-if (is.na(n_cores)) n_cores <- parallel::detectCores() - 1
-
-# Start the Cluster
-cl <- makePSOCKcluster(n_cores)
-
+# start the Cluster
+cl <- makeCluster(max(1, n_cores - 1))
 registerDoParallel(cl)
+
 
 cat(paste0("\nFound and registered ", n_cores, " cores to work with\n"))
 
 ```
 
+# XGBoost Results
 
+```{r xgb_grid_result}
 # Tune XGBoost with grouped CV folds
-```{r}
-set.seed(123)
 
-xgb_tuned = tune_grid(
+set.seed(123)
+results <- tune_grid(
   xgb_wf,
-  resamples = cv_folds,
+  resamples = resampling_foldcv,
   grid      = xgb_grid,
   metrics   = metric_set(rmse, rsq),
-  control   = control_grid(save_pred = TRUE)
+  control   = control_grid(
+    verbose       = TRUE,
+    save_pred     = TRUE,
+    parallel_over = "resamples"  # parallel over folds
+  )
 )
 
-xgb_tuned
-
-collect_metrics(xgb_tuned) %>%
-  filter(.metric == "rmse") %>%
-  arrange(mean)
+# Stop cluster
+parallel::stopCluster(cl)
+library(foreach)
+registerDoSEQ() # return to sequential
 ```
 
-# XGB best parameters
+# Check the race results
+
 ```{r}
-best_xgb = select_best(xgb_tuned, metric = "rmse")
+# collect metrics
+all_metrics     <- collect_metrics(results)
+summary_metrics <- collect_metrics(results, summarize = TRUE)
+fold_metrics    <- collect_metrics(results, summarize = FALSE)
+
+all_metrics
+summary_metrics
+
+# best RMSE and R2
+best_rmse <- select_best(results, metric = "rmse")
+best_r2   <- select_best(results, metric = "rsq")
+
+best_xgb <- best_rmse
 best_xgb
 
-# Finalize the workflow
-final_xgb_wf = finalize_workflow(xgb_wf, best_xgb)
+# final model fit on full training data
+final_xgb_wf  <- finalize_workflow(xgb_wf, best_xgb)
+final_xgb_fit <- fit(final_xgb_wf, data = train_df)
+
+# training diagnostics
+train_pred <- augment(final_xgb_fit, new_data = train_df)
+
+train_metrics <- bind_rows(
+  train_pred %>% rmse(truth = yield_mg_ha, estimate = .pred),
+  train_pred %>% rsq(truth = yield_mg_ha, estimate = .pred)
+)
+
+train_metrics
 ```
 
-# Predicted vs observed on CV predictions
+# Predicted vs Observed Plot
+
 ```{r}
-xgb_tuned %>%
-  collect_predictions() %>%
-  inner_join(select_best(xgb_tuned, metric = "rmse")) %>%
+publication_ready <- train_pred %>%
   ggplot(aes(x = yield_mg_ha, y = .pred)) +
-  geom_point(alpha = 0.3) +
-  geom_abline(color = "red") +
-  geom_smooth(method = "lm") +
-  labs(title = "XGBoost: Predicted vs Observed",
-       x = "Observed Yield (mg/ha)",
-       y = "Predicted Yield (mg/ha)")
+  geom_point(aes(fill = yield_mg_ha), shape = 21, alpha = 0.7, show.legend = FALSE) +
+  scale_fill_viridis_c(option = "H") +
+  geom_abline(color = "red", linetype = 2) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "XGBoost Training Diagnostics",
+    x = "Observed Yield (Mg/ha)",
+    y = "Predicted Yield (Mg/ha)"
+  ) +
+  annotate(
+    "label",
+    x = Inf, y = -Inf,
+    label = paste0(
+      "R-sq: ", round(train_metrics$.estimate[train_metrics$.metric == "rsq"], 3), "\\n",
+      "RMSE: ", round(train_metrics$.estimate[train_metrics$.metric == "rmse"], 3)
+    ),
+    hjust = 1.1, vjust = -0.5
+  ) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid = element_blank())
+
+publication_ready
+
+# Save plot 
+cat("Saving...... XGBoost prediction performance plot\n")
+
+ggsave(plot = publication_ready, 
+       path = here("output", "png"),
+       filename = "xgb_prediction_performance.png",  # Fixed filename
+       height = 6,
+       width = 9,
+       dpi = 600)
+```
+
+# Variable Importance
+
+```{r}
+# variable importance graph
+vip_plot <- final_xgb_fit %>%
+  extract_fit_parsnip() %>%
+  vip(num_features = 20) +
+  labs(
+    title = "XGBoost Variable Importance",
+    subtitle = "Top 20 predictors by contribution to yield model"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.minor = element_blank())
+
+# show plot
+print(vip_plot)
+
+# save VIP plot
+cat("Saving...... XGBoost variable importance plot\n")
+
+ggsave(plot = vip_plot, 
+       path = here("output", "png"),
+       filename = "xgb_variable_importance.png",
+       height = 8,
+       width = 10,
+       dpi = 600)
+
 ```
 
 # Fit on all training data and predict 2024
+
 ```{r}
-final_xgb_fit = fit(final_xgb_wf, data = train_df)
+# Predict 2024 test and complete test data submission
 
-xgb_preds = predict(final_xgb_fit, new_data = test_df) %>%
-  bind_cols(test_df %>% select(year, site, hybrid)) %>%
-  rename(pred_yield_mg_ha = .pred)
+# test_df <- test_df %>%
+#   mutate(year = factor(year, levels = levels(train_df$year)))
 
-xgb_preds
+xgb_preds <- augment(final_xgb_fit, new_data = test_df)
+
+submission_out <- test_sub %>%
+  mutate(row_id = row_number()) %>%
+  left_join(
+    xgb_preds %>% select(.pred) %>% mutate(row_id = row_number()),
+    by = "row_id"
+  ) %>%
+  mutate(
+    yield_mg_ha = coalesce(yield_mg_ha, .pred)
+  ) %>%
+  select(-row_id, -.pred)
+
+dir.create(here("output"), showWarnings = FALSE, recursive = TRUE)
+
+write_csv(
+  submission_out,
+  here("output", "testing_submission_filled_xgb_3.csv")
+)
 ```
 
-## Vip
+# Second model - glmnet
 ```{r}
-final_xgb_fit %>%
-  extract_fit_parsnip() %>%
-  vip(num_features = 15) +
-  labs(title = "XGBoost Variable Importance")
-```
-
-
-```{r}
-# Save final predictions to submission file
-test_sub %>%
-  mutate(yield_mg_ha = xgb_preds$pred_yield_mg_ha) %>%
-  write_csv("../output/testing_submission_filled_xgb.csv")
-```
-
-# Model 2: GLMNet
-```{r}
-#| message: false
-#| warning: false
-#| 
-# GLMNet has only 2 hyperparameters:
-# penalty  = how much to shrink coefficients (lambda)
-# mixture  = 0 is pure Ridge, 1 is pure Lasso, 0.5 is Elastic Net
-glmnet_spec = linear_reg(
+# glmnet-spec
+glmnet_spec <- linear_reg(
   penalty = tune(),
   mixture = tune()
 ) %>%
   set_engine("glmnet") %>%
   set_mode("regression")
 
+glmnet_wf <- workflow() %>%
+  add_model(glmnet_spec) %>%
+  add_recipe(corn_rec)
+
 glmnet_spec
 ```
 
-## GLMNet recipe
 ```{r}
-#| message: false
-#| warning: false
+# glmnet-grid
+set.seed(123)
 
-# GLMNet REQUIRES normalized predictors (unlike XGBoost)
-# So we add step_normalize() here
-glmnet_rec = recipe(
-  yield_mg_ha ~ year + site + replicate + block + hybrid +
-    date_planted + date_harvested +
-    grain_moisture +
-    previous_crop + longitude + latitude +
-    soilpH + om_pct + soilk_ppm + soilp_ppm +
-    tmean_season + tmax_mean + tmin_mean +
-    heat_stress_days + gdd_total + precip_total + srad_mean,
-  data = train_df
-) %>%
-  # Convert character predictors to factors
-  step_string2factor(all_nominal_predictors()) %>%
-  
-  # Parse date columns
-  step_mutate(
-    planted_date   = mdy(date_planted),
-    harvested_date = mdy(date_harvested)
-  ) %>%
-  
-  # Engineer date features
-  step_mutate(
-    doy_planted      = yday(planted_date),
-    doy_harvested    = yday(harvested_date),
-    harvest_interval = as.numeric(harvested_date - planted_date)
-  ) %>%
-  
-  # Remove original date columns
-  step_rm(date_planted, date_harvested, planted_date, harvested_date) %>%
-  
-  # Impute missing values
-  step_impute_median(all_numeric_predictors()) %>%
-  step_impute_mode(all_nominal_predictors()) %>%
-  
-  # Dummy encode categorical variables
-  step_dummy(all_nominal_predictors()) %>%
-  
-  # IMPORTANT: GLMNet needs normalized predictors
-  step_normalize(all_numeric_predictors())
-
-glmnet_rec
-```
-
-## GLMNet workflow
-```{r}
-#| message: false
-#| warning: false
-
-glmnet_wf = workflow() %>%
-  add_model(glmnet_spec) %>%
-  add_recipe(glmnet_rec)
-
-glmnet_wf
-```
-
-## GLMNet tuning grid
-```{r}
-#| message: false
-#| warning: false
-
-set.seed(488)
-
-# Simple grid - only 2 hyperparameters so we can try many combinations
-glmnet_grid = grid_regular(
-  penalty(range = c(-4, 0)),   # from 0.0001 to 1
-  mixture(range = c(0, 1)),    # from pure Ridge to pure Lasso
-  levels = 10                  # 10x10 = 100 combinations
+glmnet_grid <- grid_regular(
+  penalty(range = c(-4, 1)),
+  mixture(range = c(0, 1)),
+  levels = c(20, 6)
 )
-
-cat("GLMNet grid size:", nrow(glmnet_grid), "combinations\n")
 glmnet_grid
 ```
 
-## Tune GLMNet with grouped CV
 ```{r}
-set.seed(488)
+# glmnet-grid-plot
+# GLMNET tuning grid plot
+glmnet_grid_plot <- ggplot(glmnet_grid, aes(x = mixture, y = penalty)) +
+  geom_point(alpha = 0.6, color = "steelblue", size = 2) +
+  scale_y_log10() +  # Critical for GLMNET tuning grids
+  labs(
+    title = "GLMNET Tuning Grid",
+    subtitle = "Log-scale penalty vs. L1/L2 mixture",
+    x = "Mixture (0 = Ridge, 1 = Lasso)",
+    y = "Penalty (log10 scale)"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.minor = element_blank()) # Cleaner look
 
-cv_folds = group_vfold_cv(
-  train_df,
-  group = site_year,
-  v = 5
-)
+# show plot
+glmnet_grid_plot
+
+# Save plot
+cat("Saving...... GLMNET tuning grid visualization\n")
+
+ggsave(plot = glmnet_grid_plot, 
+       path = here("output", "png"),
+       filename = "glmnet_tuning_grid.png",
+       height = 6,
+       width = 8,
+       dpi = 600)
 ```
 
 ```{r}
-#| message: false
-#| warning: false
+# GLMNET tuning with parallel over resamples
+# parallel backend
+n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_ON_NODE"))
+if (is.na(n_cores)) n_cores <- max(1, parallel::detectCores() - 1)
 
-# Use same cv_folds as XGBoost for fair comparison
-set.seed(488)
+# start cluster
+cl <- parallel::makePSOCKcluster(n_cores)
+doParallel::registerDoParallel(cl)
 
-# Parallel processing to speed up
-library(doParallel)
-registerDoParallel(cores = parallel::detectCores() - 1)
+cat("Registered", n_cores, "cores for glmnet\n")
 
-glmnet_tuned = tune_grid(
+# tune glmnet - parallel over CV folds
+set.seed(123)
+glmnet_results <- tune_grid(
   glmnet_wf,
-  resamples = cv_folds,
+  resamples = resampling_foldcv,   # same CV object as XGBoost
   grid      = glmnet_grid,
   metrics   = metric_set(rmse, rsq),
-  control   = control_grid(save_pred = TRUE)
+  control   = control_grid(
+    verbose       = TRUE,
+    save_pred     = TRUE,
+    parallel_over = "resamples"
+  )
 )
 
-stopImplicitCluster()
-
-cat("GLMNet tuning complete!\n")
-
-# Show best results
-collect_metrics(glmnet_tuned) %>%
-  filter(.metric == "rmse") %>%
-  arrange(mean) %>%
-  head(10)
+# stop cluster
+parallel::stopCluster(cl)
+library(foreach)
+registerDoSEQ()
 ```
 
-## Select best GLMNet model
 ```{r}
-#| message: false
-#| warning: false
+# GLMNET metrics and best parameters
+glmnet_all_metrics     <- collect_metrics(glmnet_results)
+glmnet_summary_metrics <- collect_metrics(glmnet_results, summarize = TRUE)
+glmnet_fold_metrics    <- collect_metrics(glmnet_results, summarize = FALSE)
 
-# Select best model based on lowest RMSE
-best_glmnet = glmnet_tuned %>%
-  select_best(metric = "rmse")
+glmnet_all_metrics
+glmnet_summary_metrics
+
+# best parameter sets by RMSE and R square
+glmnet_best_rmse <- glmnet_results %>%
+  select_best(metric = "rmse") %>%
+  mutate(source = "best_rmse")
+
+glmnet_best_r2 <- glmnet_results %>%
+  select_best(metric = "rsq") %>%
+  mutate(source = "best_r2")
+
+bind_rows(glmnet_best_rmse, glmnet_best_r2) %>%
+  select(source, everything())
+```
+
+```{r}
+# RMSE as primary selection criterion
+best_glmnet <- glmnet_best_rmse %>%
+  select(-source)
 
 best_glmnet
 
-# Finalize workflow with best parameters
-final_glmnet_wf = finalize_workflow(glmnet_wf, best_glmnet)
-final_glmnet_wf
+
+# final GLMNET fit on all training data
+final_glmnet_wf  <- finalize_workflow(glmnet_wf, best_glmnet)
+final_glmnet_fit <- fit(final_glmnet_wf, data = train_df)
+
+glmnet_train_pred <- augment(final_glmnet_fit, new_data = train_df)
+
+glmnet_train_metrics <- bind_rows(
+  glmnet_train_pred %>% rmse(truth = yield_mg_ha, estimate = .pred),
+  glmnet_train_pred %>% rsq(truth = yield_mg_ha, estimate = .pred)
+)
+
+glmnet_train_metrics
 ```
 
-## GLMNet predicted vs observed plot
 ```{r}
-#| message: false
-#| warning: false
-
-# Collect CV predictions for best model
-glmnet_tuned %>%
-  collect_predictions() %>%
-  inner_join(best_glmnet) %>%
+# GLMNET predicted vs observed
+glmnet_plot <- glmnet_train_pred %>%
   ggplot(aes(x = yield_mg_ha, y = .pred)) +
-  geom_point(alpha = 0.3, color = "steelblue") +
-  geom_abline(color = "red", linewidth = 1) +
-  geom_smooth(method = "lm", color = "blue") +
+  geom_point(aes(fill = yield_mg_ha), shape = 21, alpha = 0.7, show.legend = FALSE) +
+  scale_fill_viridis_c(option = "H") +
+  geom_abline(color = "red", linetype = 2) +
+  geom_smooth(method = "lm", se = FALSE) +
   labs(
-    title = "GLMNet: Predicted vs Observed Yield",
-    x     = "Observed Yield (mg/ha)",
-    y     = "Predicted Yield (mg/ha)"
+    title = "GLMNET Training Diagnostics",
+    x = "Observed Yield (Mg/ha)",
+    y = "Predicted Yield (Mg/ha)"
   ) +
-  theme_bw()
+  annotate(
+    "label",
+    x = Inf, y = -Inf,
+    label = paste0(
+      "R-sq: ", round(glmnet_train_metrics$.estimate[glmnet_train_metrics$.metric == "rsq"], 3), "\n",
+      "RMSE: ", round(glmnet_train_metrics$.estimate[glmnet_train_metrics$.metric == "rmse"], 3)
+    ),
+    hjust = 1.1, vjust = -0.5
+  ) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid = element_blank())
+
+# show plot
+glmnet_plot
+
+# Save plot
+cat("Saving...... GLMNET prediction performance plot\n")
+
+ggsave(plot = glmnet_plot, 
+       path = here("output", "png"),
+       filename = "glmnet_prediction_performance.png",
+       height = 6,
+       width = 9,
+       dpi = 600)
+
 ```
 
-## GLMNet performance metrics
 ```{r}
-#| message: false
-#| warning: false
+# GLMNET coefficients
+glmnet_coefs <- final_glmnet_fit %>%
+  extract_fit_parsnip() %>%
+  tidy() %>%
+  filter(term != "(Intercept)") %>%
+  arrange(desc(abs(estimate)))
 
-# Show RMSE and R2 for best GLMNet model
-glmnet_tuned %>%
-  collect_metrics() %>%
-  filter(.metric %in% c("rmse", "rsq")) %>%
-  inner_join(best_glmnet) %>%
-  select(.metric, mean, std_err) %>%
-  print()
+glmnet_coefs %>%
+  slice_head(n = 20)
 ```
 
-## Fit GLMNet on all training data and predict 2024
+```{r}
+# coefficient plot
+glmnet_coef_plot <- glmnet_coefs %>%
+  slice_max(order_by = abs(estimate), n = 20) %>%
+  mutate(term = fct_reorder(term, estimate)) %>%
+  ggplot(aes(x = estimate, y = term, fill = estimate > 0)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "firebrick")) +
+  labs(
+    title = "Top 20 GLMNET Coefficients",
+    subtitle = "Positive effects (blue) vs Negative effects (red)",
+    x = "Coefficient Estimate",
+    y = NULL
+  ) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.minor = element_blank())
+
+# show plot
+glmnet_coef_plot
+
+# save the plot
+cat("Saving...... GLMNET coefficient importance plot\n")
+
+ggsave(plot = glmnet_coef_plot, 
+       path = here("output", "png"),
+       filename = "glmnet_coefficients.png",
+       height = 8,
+       width = 10,
+       dpi = 600)
+```
 
 ```{r}
-#| message: false
-#| warning: false
+# GLMNET predictions for 2024 and submission
+# Make sure year factor levels match
+# test_df <- test_df %>%
+#   mutate(year = factor(year, levels = levels(train_df$year)))
 
-# Fit final model on full training data
-final_glmnet_fit = fit(final_glmnet_wf, data = train_df)
-
-# Predict 2024 test data
-glmnet_preds = predict(final_glmnet_fit, new_data = test_df) %>%
-  bind_cols(test_df %>% select(year, site, hybrid)) %>%
+glmnet_preds <- predict(final_glmnet_fit, new_data = test_df) %>%
+  bind_cols(test_df %>% select(year, site_clean, hybrid)) %>%
   rename(pred_yield_mg_ha = .pred)
 
-glmnet_preds
+head(glmnet_preds)
+
+glmnet_submission_out <- test_sub %>%
+  mutate(yield_mg_ha = glmnet_preds$pred_yield_mg_ha)
+
+write_csv(
+  glmnet_submission_out,
+  here("output", "testing_submission_filled_glmnet_2.csv")
+)
+
+write_csv(glmnet_all_metrics,   here("output", "glmnet_cv_metrics_summary.csv"))
+write_csv(glmnet_train_metrics, here("output", "glmnet_train_metrics.csv"))
+write_csv(best_glmnet,          here("output", "glmnet_best_params.csv"))
+write_csv(glmnet_coefs,         here("output", "glmnet_coefficients.csv"))
 ```
 
-## Save GLMNet predictions to submission file
-
 ```{r}
-#| message: false
-#| warning: false
+# compare XGBoost vs GLMNET
+xgb_summary <- all_metrics %>%
+  filter(.metric %in% c("rmse", "rsq")) %>%
+  group_by(.metric) %>%
+  slice_min(mean, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(model = "XGBoost")
+write_csv(xgb_summary,   here("output", "xgb_summary_metrics_summary.csv"))
 
-# Save GLMNet predictions
-test_sub %>%
-  mutate(yield_mg_ha = glmnet_preds$pred_yield_mg_ha) %>%
-  write_csv("../output/testing_submission_glmnet.csv")
+glmnet_summary <- glmnet_all_metrics %>%
+  filter(.metric %in% c("rmse", "rsq")) %>%
+  group_by(.metric) %>%
+  slice_min(mean, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(model = "GLMNET")
+write_csv(glmnet_summary,   here("output", "glmnet_summary_metrics_summary.csv"))
 
-cat("GLMNet predictions saved!\n")
+# combined metrics dataframe
+all_models_summary <- bind_rows(xgb_summary, glmnet_summary) %>%
+  select(model, .metric, mean, std_err, n, dplyr::everything())
+
+# save combined comparison table
+write_csv(all_models_summary, here("output", "model_comparison_summary.csv"))
+
+# final summary
+all_models_summary
 ```
 
-
-```{r}
+# Generate R script
+```{r} 
 knitr::purl("Final_Project_Group_10.qmd", output = "final_project_group_10_sapelo_script.R", documentation = 0)
 ```
-
-

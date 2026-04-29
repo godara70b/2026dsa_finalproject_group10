@@ -1,0 +1,21 @@
+[1] "/home/tao92719/shared_R_libs"               
+[2] "/apps/eb/R/4.5.1-gfbf-2025a/lib64/R/library"
+Test rows: 10057 
+Training rows: 156972  | columns: 24 
+Number of post‑recipe predictors: 89 
+# A tibble: 30 × 6
+   tree_depth learn_rate trees loss_reduction min_n  mtry
+        <int>      <dbl> <int>          <dbl> <int> <int>
+ 1          1    0.00122   324       2.21e- 4    16    11
+ 2          1    0.259     396       9.24e- 7    13     6
+ 3          2    0.0356    220       8.20e- 1    22     9
+ 4          2    0.0196    386       8.53e- 3    30     1
+ 5          3    0.00888   479       3.71e- 7    34    11
+ 6          3    0.00401   293       2.49e-10    12     4
+ 7          4    0.0434    262       1.55e- 9    32    12
+ 8          4    0.0292    448       5.30e- 2    11    15
+ 9          5    0.00728   355       3.29e- 1     2     3
+10          5    0.0530    272       1.49e- 7     3    13
+# ℹ 20 more rows
+Running: vfold 
+Running: year 

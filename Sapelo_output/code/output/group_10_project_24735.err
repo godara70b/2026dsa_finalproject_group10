@@ -1,0 +1,11 @@
+/var/lib/slurmd/job24735/slurm_script: line 19: s: command not found
+Error: package or namespace load failed for ‘tidyverse’:
+ .onAttach failed in attachNamespace() for 'tidyverse', details:
+  call: NULL
+  error: package or namespace load failed for ‘ggplot2’ in dyn.load(file, DLLpath = DLLpath, ...):
+ unable to load shared object '/home/tao92719/shared_R_libs/rlang/libs/rlang.so':
+  /home/tao92719/shared_R_libs/rlang/libs/rlang.so: undefined symbol: R_mkClosure
+In addition: Warning messages:
+1: package ‘tidyverse’ was built under R version 4.5.1 
+2: package ‘ggplot2’ was built under R version 4.5.1 
+Execution halted

@@ -1,0 +1,3 @@
+penalty,mixture,.metric,.estimator,mean,n,std_err,.config,model
+1e-4,0.2,rmse,standard,2.424158445584196,5,0.004490059265380715,pre0_mod002_post0,GLMNET
+1.623776739188721,1,rsq,standard,0.2973738453279822,5,0.0035206088493202063,pre0_mod102_post0,GLMNET

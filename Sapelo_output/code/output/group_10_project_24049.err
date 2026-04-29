@@ -1,0 +1,4 @@
+/var/lib/slurmd/job24049/slurm_script: line 19: s: command not found
+Error in FUN(X[[i]], ...) : there is no package called ‘tidymodels’
+Calls: lapply -> FUN
+Execution halted

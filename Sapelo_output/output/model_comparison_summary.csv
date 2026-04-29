@@ -1,0 +1,5 @@
+model,.metric,mean,std_err,n,mtry,trees,min_n,tree_depth,learn_rate,loss_reduction,.estimator,.config,penalty,mixture
+XGBoost,rmse,1.8714776877997588,0.0043058644015060744,5,5,307,4,15,0.011787686347935873,2.9126326549087384e-8,standard,pre0_mod05_post0,NA,NA
+XGBoost,rsq,0.4140890362911348,0.003795614946267021,5,7,371,15,3,0.001,6.628703161826442e-10,standard,pre0_mod07_post0,NA,NA
+GLMNET,rmse,2.424158445584196,0.004490059265380715,5,NA,NA,NA,NA,NA,NA,standard,pre0_mod002_post0,1e-4,0.2
+GLMNET,rsq,0.2973738453279822,0.0035206088493202063,5,NA,NA,NA,NA,NA,NA,standard,pre0_mod102_post0,1.623776739188721,1

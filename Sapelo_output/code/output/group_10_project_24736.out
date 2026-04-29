@@ -1,0 +1,80 @@
+[1] "/home/tao92719/shared_R_libs"               
+[2] "/apps/eb/R/4.5.1-gfbf-2025a/lib64/R/library"
+Test rows: 10057 
+Training rows: 156972  | columns: 24 
+Number of post-recipe predictors: 5112 
+Boosted Tree Model Specification (regression)
+
+Main Arguments:
+  mtry = tune()
+  trees = tune()
+  min_n = tune()
+  tree_depth = tune()
+  learn_rate = tune()
+  loss_reduction = tune()
+
+Computational engine: xgboost 
+
+$vfold
+#  5-fold cross-validation 
+# A tibble: 5 × 2
+  splits                 id   
+  <list>                 <chr>
+1 <split [125577/31395]> Fold1
+2 <split [125577/31395]> Fold2
+3 <split [125578/31394]> Fold3
+4 <split [125578/31394]> Fold4
+5 <split [125578/31394]> Fold5
+
+$year
+# Group 10-fold cross-validation 
+# A tibble: 10 × 2
+   splits                 id        
+   <list>                 <chr>     
+ 1 <split [145640/11332]> Resample01
+ 2 <split [138871/18101]> Resample02
+ 3 <split [138059/18913]> Resample03
+ 4 <split [145381/11591]> Resample04
+ 5 <split [138175/18797]> Resample05
+ 6 <split [144362/12610]> Resample06
+ 7 <split [138455/18517]> Resample07
+ 8 <split [141948/15024]> Resample08
+ 9 <split [144748/12224]> Resample09
+10 <split [137109/19863]> Resample10
+
+$site
+# Group 38-fold cross-validation 
+# A tibble: 38 × 2
+   splits                id        
+   <list>                <chr>     
+ 1 <split [153596/3376]> Resample01
+ 2 <split [154460/2512]> Resample02
+ 3 <split [151197/5775]> Resample03
+ 4 <split [154697/2275]> Resample04
+ 5 <split [152765/4207]> Resample05
+ 6 <split [154664/2308]> Resample06
+ 7 <split [155018/1954]> Resample07
+ 8 <split [150384/6588]> Resample08
+ 9 <split [155828/1144]> Resample09
+10 <split [152169/4803]> Resample10
+# ℹ 28 more rows
+
+# A tibble: 10 × 6
+   tree_depth learn_rate trees loss_reduction min_n  mtry
+        <int>      <dbl> <int>          <dbl> <int> <int>
+ 1          2    0.00386   467        2.73e-6    23  3830
+ 2         14    0.0121    676        6.57e-5    34  3351
+ 3         12    0.00834  1478        6.30e-1    38   519
+ 4          8    0.0451    801        4.37e-2     5  1249
+ 5          4    0.164     414        9.79e-4    16  2227
+ 6         12    0.0917    616        4.36e-5    13  4143
+ 7         10    0.274    1261        3.05e-9     8  2913
+ 8          6    0.00254   937        1.08e-9    28  1915
+ 9          7    0.00135  1210        1.98e+1    21  5092
+10          5    0.0200   1092        1.33e-7    29    65
+Registered 32 cores
+Running: vfold 
+Running: year 
+Running: site 
+list()
+# A tibble: 0 × 0

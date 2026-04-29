@@ -1,0 +1,100 @@
+/var/lib/slurmd/job24775/slurm_script: line 19: s: command not found
+trying URL 'https://cloud.r-project.org/src/contrib/xgboost_3.2.1.1.tar.gz'
+Content type 'application/x-gzip' length 1625267 bytes (1.5 MB)
+==================================================
+downloaded 1.5 MB
+
+* installing *source* package ‘xgboost’ ...
+** this is package ‘xgboost’ version ‘3.2.1.1’
+** package ‘xgboost’ successfully unpacked and MD5 sums checked
+** using staged installation
+** libs
+Makevars:22: -DXGBOOST_BUILTIN_PREFETCH_PRESENT=1
+Makevars:22: -DXGBOOST_MM_PREFETCH_PRESENT=1
+Makevars:22: -DXGBOOST_STRICT_R_MODE=1
+Makevars:22: -DDMLC_LOG_BEFORE_THROW=0
+Makevars:22: -DDMLC_ENABLE_STD_THREAD=1
+Makevars:22: -DDMLC_DISABLE_STDIN=1
+Makevars:22: -DDMLC_LOG_CUSTOMIZE=1
+using C compiler: ‘gcc (GCC) 14.2.0’
+using C++ compiler: ‘g++ (GCC) 14.2.0’
+using C++17
+Makevars:22: -DXGBOOST_BUILTIN_PREFETCH_PRESENT=1
+Makevars:22: -DXGBOOST_MM_PREFETCH_PRESENT=1
+Makevars:22: -DXGBOOST_STRICT_R_MODE=1
+Makevars:22: -DDMLC_LOG_BEFORE_THROW=0
+Makevars:22: -DDMLC_ENABLE_STD_THREAD=1
+Makevars:22: -DDMLC_DISABLE_STDIN=1
+Makevars:22: -DDMLC_LOG_CUSTOMIZE=1
+installing to /home/tao92719/shared_R_libs/00LOCK-xgboost/00new/xgboost/libs
+** R
+** data
+** inst
+** byte-compile and prepare package for lazy loading
+** help
+*** installing help indices
+** building package indices
+** installing vignettes
+** testing if installed package can be loaded from temporary location
+** checking absolute paths in shared objects and dynamic libraries
+** testing if installed package can be loaded from final location
+** testing if installed package keeps a record of temporary installation path
+* DONE (xgboost)
+
+The downloaded source packages are in
+	‘/tmp/RtmpohumRd/downloaded_packages’
+── Attaching core tidyverse packages ──────────────────────── tidyverse 2.0.0 ──
+✔ dplyr     1.2.1     ✔ readr     2.2.0
+✔ forcats   1.0.1     ✔ stringr   1.6.0
+✔ ggplot2   4.0.2     ✔ tibble    3.3.0
+✔ lubridate 1.9.5     ✔ tidyr     1.3.2
+✔ purrr     1.2.2     
+── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
+✖ dplyr::filter() masks stats::filter()
+✖ dplyr::lag()    masks stats::lag()
+ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
+── Attaching packages ────────────────────────────────────── tidymodels 1.4.1 ──
+✔ broom        1.0.12     ✔ rsample      1.3.2 
+✔ dials        1.4.3      ✔ tailor       0.1.0 
+✔ infer        1.1.0      ✔ tune         2.1.0 
+✔ modeldata    1.5.1      ✔ workflows    1.3.0 
+✔ parsnip      1.5.0      ✔ workflowsets 1.1.1 
+✔ recipes      1.3.2      ✔ yardstick    1.4.0 
+── Conflicts ───────────────────────────────────────── tidymodels_conflicts() ──
+✖ scales::discard() masks purrr::discard()
+✖ dplyr::filter()   masks stats::filter()
+✖ recipes::fixed()  masks stringr::fixed()
+✖ dplyr::lag()      masks stats::lag()
+✖ yardstick::spec() masks readr::spec()
+✖ recipes::step()   masks stats::step()
+here() starts at /home/tao92719/group_10_project/2026dsa_finalproject_group10
+Loading required package: foreach
+
+Attaching package: ‘foreach’
+
+The following objects are masked from ‘package:purrr’:
+
+    accumulate, when
+
+Loading required package: iterators
+Loading required package: parallel
+
+── Recipe ──────────────────────────────────────────────────────────────────────
+
+── Inputs 
+Number of variables by role
+outcome:    1
+predictor: 22
+
+── Training information 
+Training data contained 156972 data points and 50474 incomplete rows.
+
+── Operations 
+• Variable mutation for: ~lubridate::mdy(date_planted), ... | Trained
+• Variable mutation for: ~lubridate::yday(planted_date), ... | Trained
+• Variables removed: date_planted date_harvested, ... | Trained
+• Unknown factor level assignment for: year, site, hybrid, ... | Trained
+• Dummy variables from: year, site, hybrid, previous_crop | Trained
+• Median imputation for: replicate, block, grain_moisture, ... | Trained
+/var/lib/slurmd/job24775/slurm_script: line 21: 138427 Killed                  Rscript final_project_group_10_test_sapelo_script.R
+slurmstepd: error: Detected 1 oom_kill event in StepId=24775.batch. Some of the step tasks have been OOM Killed.

@@ -1,0 +1,17 @@
+[1] "/home/tao92719/shared_R_libs"               
+[2] "/apps/eb/R/4.5.1-gfbf-2025a/lib64/R/library"
+Test rows: 10057 
+Training rows: 156972  | columns: 24 
+Number of post-recipe predictors: 5112 
+Boosted Tree Model Specification (regression)
+
+Main Arguments:
+  mtry = tune()
+  trees = tune()
+  min_n = tune()
+  tree_depth = tune()
+  learn_rate = tune()
+  loss_reduction = tune()
+
+Computational engine: xgboost 
+

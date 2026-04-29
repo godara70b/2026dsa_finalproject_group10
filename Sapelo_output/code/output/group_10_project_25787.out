@@ -1,0 +1,87 @@
+[1] "/home/tao92719/shared_R_libs"               
+[2] "/apps/eb/R/4.5.1-gfbf-2025a/lib64/R/library"
+Rows: 156,972
+Columns: 24
+$ year           <dbl> 2014, 2014, 2014, 2014, 2014, 2014, 2014, 2014, 2014, 2…
+$ site           <chr> "DEH1", "DEH1", "DEH1", "DEH1", "DEH1", "DEH1", "DEH1",…
+$ replicate      <dbl> 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1…
+$ block          <dbl> 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1…
+$ hybrid         <chr> "M0088/LH185", "M0143/LH185", "M0003/LH185", "M0035/LH1…
+$ date_planted   <chr> "5/5/14", "5/5/14", "5/5/14", "5/5/14", "5/5/14", "5/5/…
+$ date_harvested <chr> "9/29/14", "9/29/14", "9/29/14", "9/29/14", "9/29/14", …
+$ yield_mg_ha    <dbl> 5.721725, 11.338246, 6.540810, 10.366857, 10.908814, 11…
+$ grain_moisture <dbl> 20.8, 25.8, 20.8, 23.7, 19.4, 16.8, 19.7, 10.5, 17.7, 1…
+$ site_clean     <chr> "DEH1", "DEH1", "DEH1", "DEH1", "DEH1", "DEH1", "DEH1",…
+$ longitude      <dbl> -75.20405, -75.20405, -75.20405, -75.20405, -75.20405, …
+$ latitude       <dbl> 38.63741, 38.63741, 38.63741, 38.63741, 38.63741, 38.63…
+$ previous_crop  <chr> "soybean", "soybean", "soybean", "soybean", "soybean", …
+$ tmean_season   <dbl> 20.65296, 20.65296, 20.65296, 20.65296, 20.65296, 20.65…
+$ tmax_mean      <dbl> 22.68788, 22.68788, 22.68788, 22.68788, 22.68788, 22.68…
+$ tmin_mean      <dbl> 18.61804, 18.61804, 18.61804, 18.61804, 18.61804, 18.61…
+$ heat_days      <dbl> 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0…
+$ gdd_total      <dbl> 1960.355, 1960.355, 1960.355, 1960.355, 1960.355, 1960.…
+$ precip_total   <dbl> 580.72, 580.72, 580.72, 580.72, 580.72, 580.72, 580.72,…
+$ srad_mean      <dbl> 19.26875, 19.26875, 19.26875, 19.26875, 19.26875, 19.26…
+$ soilpH         <dbl> NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
+$ om_pct         <dbl> NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
+$ soilk_ppm      <dbl> NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
+$ soilp_ppm      <dbl> NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
+Training rows: 156972  | columns: 24 
+Test rows: 10057 
+# A tibble: 15 × 6
+   tree_depth learn_rate trees loss_reduction min_n  mtry
+        <int>      <dbl> <int>          <dbl> <int> <int>
+ 1          1    0.0611    285       3.73e- 4    37     8
+ 2          2    0.0405    500       5.62e- 5    12     4
+ 3          3    0.001     371       6.63e-10    15     7
+ 4          4    0.0178    264       7.20e- 1     2     9
+ 5          5    0.00781   435       4.77e+ 0    31    14
+ 6          6    0.210     242       4.39e- 9    18     3
+ 7          7    0.139     350       1.93e- 7     7    15
+ 8          8    0.00343   328       3.16e+ 1    21     1
+ 9          9    0.00151   200       8.48e- 6    26    12
+10         10    0.0268    414       1   e-10    34    13
+11         11    0.00518   392       1.28e- 6    40     2
+12         12    0.316     457       1.64e- 2    23     6
+13         13    0.00228   478       2.47e- 3    10    11
+14         14    0.0921    221       1.09e- 1    29    10
+15         15    0.0118    307       2.91e- 8     4     5
+# A tibble: 30 × 12
+    mtry trees min_n tree_depth learn_rate loss_reduction .metric .estimator
+   <int> <int> <int>      <int>      <dbl>          <dbl> <chr>   <chr>     
+ 1     1   328    21          8    0.00343        3.16e+1 rmse    standard  
+ 2     1   328    21          8    0.00343        3.16e+1 rsq     standard  
+ 3     2   392    40         11    0.00518        1.28e-6 rmse    standard  
+ 4     2   392    40         11    0.00518        1.28e-6 rsq     standard  
+ 5     3   242    18          6    0.210          4.39e-9 rmse    standard  
+ 6     3   242    18          6    0.210          4.39e-9 rsq     standard  
+ 7     4   500    12          2    0.0405         5.62e-5 rmse    standard  
+ 8     4   500    12          2    0.0405         5.62e-5 rsq     standard  
+ 9     5   307     4         15    0.0118         2.91e-8 rmse    standard  
+10     5   307     4         15    0.0118         2.91e-8 rsq     standard  
+# ℹ 20 more rows
+# ℹ 4 more variables: mean <dbl>, n <int>, std_err <dbl>, .config <chr>
+# A tibble: 30 × 12
+    mtry trees min_n tree_depth learn_rate loss_reduction .metric .estimator
+   <int> <int> <int>      <int>      <dbl>          <dbl> <chr>   <chr>     
+ 1     1   328    21          8    0.00343        3.16e+1 rmse    standard  
+ 2     1   328    21          8    0.00343        3.16e+1 rsq     standard  
+ 3     2   392    40         11    0.00518        1.28e-6 rmse    standard  
+ 4     2   392    40         11    0.00518        1.28e-6 rsq     standard  
+ 5     3   242    18          6    0.210          4.39e-9 rmse    standard  
+ 6     3   242    18          6    0.210          4.39e-9 rsq     standard  
+ 7     4   500    12          2    0.0405         5.62e-5 rmse    standard  
+ 8     4   500    12          2    0.0405         5.62e-5 rsq     standard  
+ 9     5   307     4         15    0.0118         2.91e-8 rmse    standard  
+10     5   307     4         15    0.0118         2.91e-8 rsq     standard  
+# ℹ 20 more rows
+# ℹ 4 more variables: mean <dbl>, n <int>, std_err <dbl>, .config <chr>
+# A tibble: 1 × 7
+   mtry trees min_n tree_depth learn_rate loss_reduction .config         
+  <int> <int> <int>      <int>      <dbl>          <dbl> <chr>           
+1     5   307     4         15     0.0118   0.0000000291 pre0_mod05_post0
+# A tibble: 2 × 3
+  .metric .estimator .estimate
+  <chr>   <chr>          <dbl>
+1 rmse    standard       1.72 
+2 rsq     standard       0.696

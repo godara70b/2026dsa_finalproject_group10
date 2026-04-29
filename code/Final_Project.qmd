@@ -1,0 +1,780 @@
+---
+title: "Final Project"
+format: html
+editor: visual
+---
+
+# Load packages
+
+```{r}
+#| message: false
+#| message: false
+
+library(tidymodels)
+library(tidyverse)
+library(recipes)  # step_rm to work
+library(lubridate)
+library(ranger)
+library(rsample)
+```
+
+# Loading and inspecting the training and testing data files
+
+```{r}
+#| message: false
+#| message: false
+
+# list.files("../data/training", full.names = TRUE)
+# list.files("../data/testing", full.names = TRUE)
+
+```
+
+## **Read all CSV files**
+```{r}
+#| message: false
+#| warning: false
+
+train_meta  = read_csv("../data/training/training_meta.csv")
+train_soil  = read_csv("../data/training/training_soil.csv")
+train_trait = read_csv("../data/training/training_trait.csv")
+
+test_meta   = read_csv("../data/testing/testing_meta.csv")
+test_soil   = read_csv("../data/testing/testing_soil.csv")
+test_sub    = read_csv("../data/testing/testing_submission.csv")
+```
+
+## Clean site names and join all files
+
+```{r}
+#| message: false
+#| warning: false
+
+clean_site = function(s) {
+  s <- str_remove(s, "_\\d{4}$")         
+  s <- str_remove(s, "[abc]$")            
+  s <- str_remove(s, "-\\s*(Dry|Early|Late)")   
+  s <- str_remove(s, "\\s*-?\\s*rep\\s*\\d+")  
+  s <- str_remove(s, "_[12]$")            
+  str_trim(s)
+}
+
+# Clean and deduplicate training meta
+train_meta_clean = train_meta %>%
+  mutate(site = clean_site(site)) %>%
+  group_by(year, site) %>%
+  summarise(
+    previous_crop = first(previous_crop),
+    longitude     = mean(longitude, na.rm = TRUE),
+    latitude      = mean(latitude,  na.rm = TRUE),
+    .groups       = "drop"
+  )
+
+# Clean and deduplicate training soil
+train_soil_clean = train_soil %>%
+  mutate(site = clean_site(site)) %>%
+  group_by(year, site) %>%
+  summarise(
+    soilpH    = mean(soilpH,    na.rm = TRUE),
+    om_pct    = mean(om_pct,    na.rm = TRUE),
+    soilk_ppm = mean(soilk_ppm, na.rm = TRUE),
+    soilp_ppm = mean(soilp_ppm, na.rm = TRUE),
+    .groups   = "drop"
+  )
+
+# Clean testing soil
+test_soil_clean = test_soil %>%
+  mutate(site = clean_site(site)) %>%
+  group_by(year, site) %>%
+  summarise(
+    soilpH    = mean(soilpH,    na.rm = TRUE),
+    om_pct    = mean(om_pct,    na.rm = TRUE),
+    soilk_ppm = mean(soilk_ppm, na.rm = TRUE),
+    soilp_ppm = mean(soilp_ppm, na.rm = TRUE),
+    .groups   = "drop"
+  )
+
+# Clean site in trait before joining
+train_trait_clean = train_trait %>%
+  mutate(site = clean_site(site))
+
+# Build training dataset: trait + meta + soil
+train_df = train_trait_clean %>%
+  left_join(train_meta_clean,  by = c("year", "site")) %>%
+  left_join(train_soil_clean,  by = c("year", "site"))
+
+# build testing dataset: submission + meta + soil
+test_df = test_sub %>%
+  left_join(test_meta,         by = c("year", "site")) %>%
+  left_join(test_soil_clean,   by = c("year", "site"))
+
+#  Check results 
+cat("Training rows:", nrow(train_df), "\n")
+cat("Testing rows:",  nrow(test_df),  "\n")
+
+cat("\nTraining NAs per column:\n")
+train_df %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "n_NA") %>%
+  filter(n_NA > 0) %>%
+  print()
+
+cat("\nTesting NAs per column:\n")
+test_df %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "n_NA") %>%
+  filter(n_NA > 0) %>%
+  print()
+```
+
+## Add site_year grouping variable
+
+```{r}
+#| message: false
+#| warning: false
+
+train_df = train_df %>%
+  mutate(site_year = paste(site, year, sep = "_"))
+
+test_df = test_df %>%
+  mutate(site_year = paste(site, year, sep = "_"))
+```
+
+## Convert character columns to factors
+
+```{r}
+#| message: false
+#| warning: false
+
+train_df = train_df %>%
+  mutate(
+    site          = factor(site),
+    hybrid        = factor(hybrid),
+    previous_crop = factor(previous_crop),
+    site_year     = factor(site_year)
+  )
+
+test_df = test_df %>%
+  mutate(
+    site          = factor(site),
+    hybrid        = factor(hybrid),
+    previous_crop = factor(previous_crop),
+    site_year     = factor(site_year)
+  )
+```
+
+## Count predictors (needed for mtry in XGBoost grid)
+
+```{r}
+n_pred = train_df %>%
+  select(-yield_mg_ha, -site_year) %>%
+  ncol()
+
+cat("Number of predictors:", n_pred, "\n")
+```
+## Pull weather data using nasapower
+
+```{r}
+#| message: false
+#| warning: false
+#| eval: false   
+
+library(nasapower)
+
+# Get unique site-year-lat-lon from BOTH training and testing meta
+# We need weather for every site-year we have coordinates for
+sites_train = train_meta_clean %>%
+  filter(!is.na(latitude), !is.na(longitude)) %>%
+  select(year, site, latitude, longitude) %>%
+  distinct()
+
+sites_test = test_meta %>%
+  select(year, site, latitude, longitude) %>%
+  filter(!is.na(latitude), !is.na(longitude)) %>%
+  distinct()
+
+all_sites = bind_rows(sites_train, sites_test) %>%
+  distinct(year, site, .keep_all = TRUE)
+
+cat("Total site-years to pull weather for:", nrow(all_sites), "\n")
+
+# Function to pull growing season weather for one site-year
+# Corn growing season = May (day 121) to October (day 304)
+pull_weather = function(year, lat, lon, site) {
+  
+  tryCatch({
+    raw = get_power(
+      community  = "AG",
+      lonlat     = c(lon, lat),
+      pars       = c("T2M_MAX",   # daily max temperature (C)
+                     "T2M_MIN",   # daily min temperature (C)  
+                     "PRECTOTCORR", # precipitation (mm/day)
+                     "ALLSKY_SFC_SW_DWN"), # solar radiation (MJ/m2/day)
+      dates      = c(paste0(year, "-05-01"),   # May 1
+                     paste0(year, "-10-31")),  # Oct 31
+      temporal_api = "daily"
+    )
+    
+    raw %>%
+      mutate(
+        site = site,
+        year = year,
+        # Growing degree days for corn (base 10C, max 30C)
+        tmax_capped = pmin(T2M_MAX, 30),
+        tmin_capped = pmax(T2M_MIN, 10),
+        gdd = pmax((tmax_capped + tmin_capped) / 2 - 10, 0)
+      ) %>%
+      group_by(year, site) %>%
+      summarise(
+        # Temperature summaries
+        tmean_season   = mean((T2M_MAX + T2M_MIN) / 2, na.rm = TRUE),
+        tmax_mean      = mean(T2M_MAX, na.rm = TRUE),
+        tmin_mean      = mean(T2M_MIN, na.rm = TRUE),
+        # Heat stress: days where max temp > 35C
+        heat_stress_days = sum(T2M_MAX > 35, na.rm = TRUE),
+        # Growing degree days (accumulated)
+        gdd_total      = sum(gdd, na.rm = TRUE),
+        # Precipitation
+        precip_total   = sum(PRECTOTCORR, na.rm = TRUE),
+        # Solar radiation
+        srad_mean      = mean(ALLSKY_SFC_SW_DWN, na.rm = TRUE),
+        .groups = "drop"
+      )
+    
+  }, error = function(e) {
+    message("Failed for site=", site, " year=", year, ": ", e$message)
+    return(NULL)
+  })
+}
+
+# Pull weather for all site-years
+cat("Pulling weather data... this takes ~5-10 minutes\n")
+
+weather_list <- vector("list", nrow(all_sites))
+
+for (i in seq_len(nrow(all_sites))) {
+  cat("Pulling", i, "of", nrow(all_sites), 
+      "| site:", all_sites$site[i], 
+      "| year:", all_sites$year[i], "\n")
+  
+  weather_list[[i]] <- pull_weather(
+    year = all_sites$year[i],
+    lat  = all_sites$latitude[i],
+    lon  = all_sites$longitude[i],
+    site = all_sites$site[i]
+  )
+  
+ 
+  Sys.sleep(0.5)
+}
+
+# Combine all results
+weather_df <- bind_rows(weather_list)
+
+cat("Weather data pulled successfully!\n")
+cat("Rows:", nrow(weather_df), "\n")
+cat("Columns:", ncol(weather_df), "\n")
+
+# Save to file
+write_csv(weather_df, "../data/weather_season_summary.csv")
+cat("Saved to ../data/weather_season_summary.csv\n")
+```
+
+## Load weather and join to training and testing data
+
+```{r}
+#| message: false
+#| warning: false
+
+# Load the saved weather file
+weather_df = read_csv("../data/weather_season_summary.csv")
+
+# Join weather to training data
+train_df = train_df %>%
+  left_join(weather_df, by = c("year", "site"))
+
+# Join weather to testing data
+test_df = test_df %>%
+  left_join(weather_df, by = c("year", "site"))
+
+cat("Training columns after weather join:", ncol(train_df), "\n")
+cat("Testing columns after weather join:", ncol(test_df), "\n")
+
+# Check weather NAs
+cat("\nWeather NAs in training:\n")
+train_df %>%
+  select(tmean_season, tmax_mean, tmin_mean, 
+         heat_stress_days, gdd_total, precip_total, srad_mean) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "n_NA") %>%
+  print()
+
+# Update n_pred after adding weather columns
+n_pred = train_df %>%
+  select(-yield_mg_ha, -site_year) %>%
+  ncol()
+
+cat("\nUpdated number of predictors:", n_pred, "\n")
+```
+
+
+# Define a recipe using yield_mg_ha as the outcome
+
+```{r}
+#| message: false
+#| message: false
+
+corn_rec = recipe(
+  yield_mg_ha ~ year + site + replicate + block + hybrid +
+    date_planted + date_harvested +
+    grain_moisture +
+    previous_crop + longitude + latitude +
+    soilpH + om_pct + soilk_ppm + soilp_ppm +
+    tmean_season + tmax_mean + tmin_mean +
+    heat_stress_days + gdd_total + precip_total + srad_mean,
+  data = train_df
+) %>%
+  # Convert character predictors to factors
+  step_string2factor(all_nominal_predictors()) %>%
+  
+  # Date variables from the character date columns
+  step_mutate(
+    planted_date   = mdy(date_planted),
+    harvested_date = mdy(date_harvested)
+  ) %>%
+  
+  # Engineer numeric date features
+  step_mutate(
+    doy_planted      = yday(planted_date),
+    doy_harvested    = yday(harvested_date),
+    harvest_interval = as.numeric(harvested_date - planted_date)
+  ) %>%
+  
+  # Remove original string and intermediate Date columns
+  step_rm(date_planted, date_harvested, planted_date, harvested_date) %>%
+  
+  # Impute missing numeric and categorical data
+  step_impute_median(all_numeric_predictors()) %>%   # numeric median imputation[web:37][web:43]
+  step_impute_mode(all_nominal_predictors()) %>%     # mode imputation for factors[web:40]
+  
+  # Dummy categorical predictors encoded
+  step_dummy(all_nominal_predictors())
+
+corn_rec
+
+```
+
+## **Create grouped resampling**
+
+```{r}
+#| message: false
+#| message: false
+
+set.seed(123)
+
+cv_folds = group_vfold_cv(
+  train_df,
+  group = site_year,
+  v = 5
+)
+
+corn_rec
+cv_folds
+
+```
+
+## **Tuned XGBoost model with grouped CV**
+
+```{r}
+#| message: false
+#| message: false
+
+# XGBoost spec with tunable hyperparameters
+xgb_spec = boost_tree(
+  trees          = 1000,
+  tree_depth     = tune(),
+  learn_rate     = tune(),
+  loss_reduction = tune(),
+  min_n          = tune(),
+  sample_size    = tune(),
+  mtry           = tune()
+) %>%
+  set_mode("regression") %>%
+  set_engine("xgboost")
+
+xgb_spec
+```
+
+# XGBoost workflow
+
+```{r}
+#| message: false
+#| message: false
+
+xgb_wf = workflow() %>%
+  add_model(xgb_spec) %>%
+  add_recipe(corn_rec)
+
+xgb_wf
+```
+
+## **Tuning grid for** XGBoost
+
+```{r}
+#| message: false
+#| message: false
+
+set.seed(123)
+
+# Use Latin space‑filling over a range in the tuning
+xgb_grid = grid_space_filling(
+  tree_depth(),
+  learn_rate(range = c(-3, -0.5)),
+  loss_reduction(),
+  min_n(),
+  sample_size = sample_prop(),
+  mtry(range = c(5, min(50, n_pred))),  # use the n_pred counted from train_df
+  size = 30
+)
+
+xgb_grid
+```
+
+# Tune XGBoost with grouped CV
+
+```{r}
+set.seed(123)
+
+xgb_tuned = tune_grid(
+  xgb_wf,
+  resamples = cv_folds,
+  grid      = xgb_grid,
+  metrics   = metric_set(rmse, rsq),
+  control   = control_grid(save_pred = TRUE)
+)
+
+xgb_tuned
+
+collect_metrics(xgb_tuned) %>%
+  filter(.metric == "rmse") %>%
+  arrange(mean)
+
+```
+
+# XGB best parameters
+
+```{r}
+best_xgb = select_best(xgb_tuned, metric = "rmse")
+best_xgb
+
+# Finalize the workflow
+final_xgb_wf = finalize_workflow(xgb_wf, best_xgb)
+```
+
+# Predicted vs observed on CV predictions
+```{r}
+xgb_tuned %>%
+  collect_predictions() %>%
+  inner_join(select_best(xgb_tuned, metric = "rmse")) %>%
+  ggplot(aes(x = yield_mg_ha, y = .pred)) +
+  geom_point(alpha = 0.3) +
+  geom_abline(color = "red") +
+  geom_smooth(method = "lm") +
+  labs(title = "XGBoost: Predicted vs Observed",
+       x = "Observed Yield (mg/ha)",
+       y = "Predicted Yield (mg/ha)")
+```
+
+
+
+# Fit on all training data and predict 2024
+
+```{r}
+final_xgb_fit = fit(final_xgb_wf, data = train_df)
+
+xgb_preds = predict(final_xgb_fit, new_data = test_df) %>%
+  bind_cols(test_df %>% select(year, site, hybrid)) %>%
+  rename(pred_yield_mg_ha = .pred)
+
+xgb_preds
+```
+
+## Vip
+```{r}
+library(vip)
+final_xgb_fit %>%
+  extract_fit_parsnip() %>%
+  vip(num_features = 15) +
+  labs(title = "XGBoost Variable Importance")
+```
+
+```{r}
+# Save final predictions to submission file
+test_sub %>%
+  mutate(yield_mg_ha = xgb_preds$pred_yield_mg_ha) %>%
+  write_csv("../output/testing_submission_filled_xgb.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# machine learning models: GLMNet
+
+
+```{r}
+#| message: false
+#| warning: false
+
+library(glmnet)
+library(tidyverse)
+library(tidymodels)
+# GLMNet has only 2 hyperparameters:
+# penalty  = how much to shrink coefficients (lambda)
+# mixture  = 0 is pure Ridge, 1 is pure Lasso, 0.5 is Elastic Net
+glmnet_spec = linear_reg(
+  penalty = tune(),
+  mixture = tune()
+) %>%
+  set_engine("glmnet") %>%
+  set_mode("regression")
+
+glmnet_spec
+```
+
+## GLMNet recipe
+
+```{r}
+#| message: false
+#| warning: false
+
+# GLMNet REQUIRES normalized predictors (unlike XGBoost)
+# So we add step_normalize() here
+glmnet_rec = recipe(
+  yield_mg_ha ~ year + site + replicate + block + hybrid +
+    date_planted + date_harvested +
+    grain_moisture +
+    previous_crop + longitude + latitude +
+    soilpH + om_pct + soilk_ppm + soilp_ppm +
+    tmean_season + tmax_mean + tmin_mean +
+    heat_stress_days + gdd_total + precip_total + srad_mean,
+  data = train_df
+) %>%
+  # Convert character predictors to factors
+  step_string2factor(all_nominal_predictors()) %>%
+  
+  # Parse date columns
+  step_mutate(
+    planted_date   = mdy(date_planted),
+    harvested_date = mdy(date_harvested)
+  ) %>%
+  
+  # Engineer date features
+  step_mutate(
+    doy_planted      = yday(planted_date),
+    doy_harvested    = yday(harvested_date),
+    harvest_interval = as.numeric(harvested_date - planted_date)
+  ) %>%
+  
+  # Remove original date columns
+  step_rm(date_planted, date_harvested, planted_date, harvested_date) %>%
+  
+  # Impute missing values
+  step_impute_median(all_numeric_predictors()) %>%
+  step_impute_mode(all_nominal_predictors()) %>%
+  
+  # Dummy encode categorical variables
+  step_dummy(all_nominal_predictors()) %>%
+  
+  # IMPORTANT: GLMNet needs normalized predictors
+  step_normalize(all_numeric_predictors())
+
+glmnet_rec
+```
+
+## GLMNet workflow
+
+```{r}
+#| message: false
+#| warning: false
+
+glmnet_wf = workflow() %>%
+  add_model(glmnet_spec) %>%
+  add_recipe(glmnet_rec)
+
+glmnet_wf
+```
+
+## GLMNet tuning grid
+
+```{r}
+#| message: false
+#| warning: false
+
+set.seed(488)
+
+# Simple grid - only 2 hyperparameters so we can try many combinations
+glmnet_grid = grid_regular(
+  penalty(range = c(-4, 0)),   # from 0.0001 to 1
+  mixture(range = c(0, 1)),    # from pure Ridge to pure Lasso
+  levels = 10                  # 10x10 = 100 combinations
+)
+
+cat("GLMNet grid size:", nrow(glmnet_grid), "combinations\n")
+glmnet_grid
+```
+
+## Tune GLMNet with grouped CV
+
+```{r}
+set.seed(488)
+
+cv_folds = group_vfold_cv(
+  train_df,
+  group = site_year,
+  v = 5
+)
+```
+
+```{r}
+#| message: false
+#| warning: false
+
+# Use same cv_folds as XGBoost for fair comparison
+set.seed(488)
+
+# Parallel processing to speed up
+library(doParallel)
+registerDoParallel(cores = parallel::detectCores() - 1)
+
+glmnet_tuned = tune_grid(
+  glmnet_wf,
+  resamples = cv_folds,
+  grid      = glmnet_grid,
+  metrics   = metric_set(rmse, rsq),
+  control   = control_grid(save_pred = TRUE)
+)
+
+stopImplicitCluster()
+
+cat("GLMNet tuning complete!\n")
+
+# Show best results
+collect_metrics(glmnet_tuned) %>%
+  filter(.metric == "rmse") %>%
+  arrange(mean) %>%
+  head(10)
+```
+
+## Select best GLMNet model
+
+```{r}
+#| message: false
+#| warning: false
+
+# Select best model based on lowest RMSE
+best_glmnet = glmnet_tuned %>%
+  select_best(metric = "rmse")
+
+best_glmnet
+
+# Finalize workflow with best parameters
+final_glmnet_wf = finalize_workflow(glmnet_wf, best_glmnet)
+final_glmnet_wf
+```
+
+## GLMNet predicted vs observed plot
+
+```{r}
+#| message: false
+#| warning: false
+
+# Collect CV predictions for best model
+glmnet_tuned %>%
+  collect_predictions() %>%
+  inner_join(best_glmnet) %>%
+  ggplot(aes(x = yield_mg_ha, y = .pred)) +
+  geom_point(alpha = 0.3, color = "steelblue") +
+  geom_abline(color = "red", linewidth = 1) +
+  geom_smooth(method = "lm", color = "blue") +
+  labs(
+    title = "GLMNet: Predicted vs Observed Yield",
+    x     = "Observed Yield (mg/ha)",
+    y     = "Predicted Yield (mg/ha)"
+  ) +
+  theme_bw()
+```
+
+## GLMNet performance metrics
+
+```{r}
+#| message: false
+#| warning: false
+
+# Show RMSE and R2 for best GLMNet model
+glmnet_tuned %>%
+  collect_metrics() %>%
+  filter(.metric %in% c("rmse", "rsq")) %>%
+  inner_join(best_glmnet) %>%
+  select(.metric, mean, std_err) %>%
+  print()
+```
+
+## Fit GLMNet on all training data and predict 2024
+
+```{r}
+#| message: false
+#| warning: false
+
+# Fit final model on full training data
+final_glmnet_fit = fit(final_glmnet_wf, data = train_df)
+
+# Predict 2024 test data
+glmnet_preds = predict(final_glmnet_fit, new_data = test_df) %>%
+  bind_cols(test_df %>% select(year, site, hybrid)) %>%
+  rename(pred_yield_mg_ha = .pred)
+
+glmnet_preds
+```
+
+## Save GLMNet predictions to submission file
+
+```{r}
+#| message: false
+#| warning: false
+
+# Save GLMNet predictions
+test_sub %>%
+  mutate(yield_mg_ha = glmnet_preds$pred_yield_mg_ha) %>%
+  write_csv("../output/testing_submission_glmnet.csv")
+
+cat("GLMNet predictions saved!\n")
+```
+
+
+```{r}
+
+```
+

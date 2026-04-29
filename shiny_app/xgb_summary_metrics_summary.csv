@@ -1,0 +1,3 @@
+mtry,trees,min_n,tree_depth,learn_rate,loss_reduction,.metric,.estimator,mean,n,std_err,.config,model
+5,307,4,15,0.011787686347935873,2.9126326549087384e-8,rmse,standard,1.8714776877997588,5,0.0043058644015060744,pre0_mod05_post0,XGBoost
+7,371,15,3,0.001,6.628703161826442e-10,rsq,standard,0.4140890362911348,5,0.003795614946267021,pre0_mod07_post0,XGBoost

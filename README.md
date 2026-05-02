@@ -4,8 +4,8 @@
 This project predicts corn hybrid yield using machine learning models trained on variety trial data from 2014-2023 across 45 US sites across the USA.
 
 ## Team
-- Taiwo Owolanke (Student 1)
-- Amit Godara (Student 2)
+- Amit Godara (Student 1)
+- Taiwo Owolanke (Student 2)
 
 ## 1. ModelsXGBoost
 ## 2. GLMNet Elastic Net

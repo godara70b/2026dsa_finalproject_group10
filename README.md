@@ -1,4 +1,4 @@
-# 2026dsa_finalproject_group10
+# 2026 CRSS 8030 DSA Final Project Group10
 ## About
 This project predicts corn hybrid yield using machine learning models trained on variety trial data from 2014-2023 across 45 US sites across the USA.
 ## Team

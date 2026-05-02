@@ -20,3 +20,6 @@ This project predicts corn hybrid yield using machine learning models trained on
 
 ## Goal
 Predict 2024 corn corn yield (mg/ha) for 23 sites across the USA
+
+## Shiny App (Result Communication)
+https://godara70b.shinyapps.io/Corn_team10/

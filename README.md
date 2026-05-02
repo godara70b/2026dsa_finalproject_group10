@@ -1,12 +1,14 @@
-# 2026 CRSS 8030 DSA Final Project Group10
+# 2026 CRSS 8030 DSA Final Project Group 10
+
 ## About
 This project predicts corn hybrid yield using machine learning models trained on variety trial data from 2014-2023 across 45 US sites across the USA.
+
 ## Team
 - Amit Godara (Student 1)
 - Taiwo Owolanke (Student 2)
 
-## ModelsXGBoost
-## GLMNet Elastic Net
+## 1. ModelsXGBoost
+## 2. GLMNet Elastic Net
 
 ## Data
 - Training: 164,477 rows, 2014-2023
